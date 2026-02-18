@@ -1,0 +1,26 @@
+{
+  "entity.creeper.ambient": {
+    "replace": true,
+    "sounds": [
+      { "name": "mobvoices/creeper/voice", "stream": false }
+    ]
+  },
+  "entity.creeper.hurt": {
+    "replace": true,
+    "sounds": [
+      { "name": "mobvoices/creeper/voice", "stream": false }
+    ]
+  },
+  "entity.creeper.death": {
+    "replace": true,
+    "sounds": [
+      { "name": "mobvoices/creeper/voice", "stream": false }
+    ]
+  },
+  "entity.creeper.primed": {
+    "replace": true,
+    "sounds": [
+      { "name": "mobvoices/creeper/voice", "stream": false }
+    ]
+  }
+}

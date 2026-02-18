@@ -1,0 +1,17 @@
+# OS metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Windows alternate data stream files that can appear after cross-platform copies
+*:Zone.Identifier
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log

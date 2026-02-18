@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0c1622"/>
+  <rect x="36" y="36" width="440" height="440" rx="24" fill="#f0ece9" stroke="#d9edf7" stroke-width="8"/>
+  <circle cx="196" cy="220" r="34" fill="#342526"/>
+  <circle cx="316" cy="220" r="34" fill="#342526"/>
+  <rect x="166" y="294" width="180" height="52" rx="14" fill="#0f1822"/>
+  <text x="256" y="404" text-anchor="middle" font-size="48" fill="#f6fcff" font-family="Trebuchet MS, sans-serif">GHAST</text>
+</svg>
