@@ -1,69 +1,115 @@
-# mvo (Mob Voice Over)
+# Mob Voice Over
 
-Mob Voice Over is a minimal browser wizard that records your voice for mobs and exports a Minecraft Java resource pack zip.
+Browser-based recorder for generating a Minecraft Java resource pack that replaces mob sounds with voice recordings.
 
-## Simplified UX
+## What This Repo Is
 
-- No setup screen.
-- Pack name is fixed to `Mob Voice Over`.
-- `pack.mcmeta` is generated from `public/mob_config.json` `versionPresets[0]` (`packFormat` + optional `supportedFormats` range).
-- You press and hold to record one sound per mob, then release to stop.
-- Review playback, then use `Next` / `Done` as the accept action.
-- That one recording is used for all configured mob sound variants (ambient/hurt/death plus mob-specific variants like primed, scream, celebrate, etc.).
+- Single-page app with no build step.
+- Static assets + vanilla JavaScript module (`src/app.js`).
+- Uses `MediaRecorder` for capture, `@ffmpeg/*` (WASM loaded from CDN) for OGG conversion/mastering, and `JSZip` for zip generation.
 
-## Mob Images
+## Project Layout
 
-Mob prompt images are stored locally in `public/assets/mobs/` and referenced from `public/mob_config.json`.
+```text
+.
+├── index.html                    # App entrypoint
+├── styles.css                    # UI styling
+├── src/app.js                    # Main app logic
+├── public/mob_config.json        # Mob/version config (primary data contract)
+├── public/assets/                # Mob images + pack icon
+└── .github/workflows/pages.yml   # GitHub Pages deploy workflow
+```
 
-## Quick Start
+## Local Development
 
-1. Start a static server from repo root:
+Requirements:
+- Modern Chromium-based browser (recommended).
+- Python 3 (or any static file server).
+
+Run:
 
 ```bash
+cd ~/dev/mob-voice-over
 python3 -m http.server 8080
 ```
 
-2. Open:
+Open `http://localhost:8080`.
 
-```text
-http://localhost:8080
+Notes:
+- Do not open with `file://`; the app fetches JSON/assets and needs HTTP.
+- First conversion/export may be slow because ffmpeg WASM is loaded on demand from CDN.
+
+## How The App Works
+
+1. `src/app.js` loads `public/mob_config.json`.
+2. Record flow:
+   - User holds button to record (`MediaRecorder`).
+   - Recording is previewable and marked accepted via `Next/Done` or `Skip`.
+   - Non-OGG input is converted to OGG immediately after recording.
+3. Export flow:
+   - Builds `pack.mcmeta` from `versionPresets[0]`.
+   - Builds `assets/minecraft/sounds.json` from each mob `soundEventKeys`.
+   - Writes one audio file per mob to `assets/minecraft/sounds/mobvoices/<mob-id>/voice.ogg`.
+   - Downloads final pack zip (`Mob_Voice_Over.zip`).
+
+## Configuration Contract (`public/mob_config.json`)
+
+Top-level fields used by code:
+- `versionPresets[0].packFormat` -> `pack.pack_format`
+- optional `versionPresets[0].supportedFormats.min/max` -> `pack.min_format`, `pack.max_format`, and `pack.supported_formats`
+- app currently resolves `mobSets.basic`
+- each mob entry fields:
+  - `id`
+  - `mob`
+  - `image`
+  - `promptText`
+  - `lengthHintMs` (present for authoring; app currently enforces a fixed 5s max)
+  - `styleHints`
+  - `soundEventKeys` (all mapped to the same recorded clip)
+
+## Raw Recording Import/Export
+
+The app can export/import raw clips to speed iteration:
+- Zip name: `MobVoiceOver_raw_recordings.zip`
+- Contents:
+  - `raw/<mob-id>.ogg`
+  - `raw/manifest.json` with clip metadata
+
+Import behavior:
+- Prefers `raw/manifest.json` when present.
+- Falls back to scanning `raw/*.ext`.
+- Ignores clips whose `mob-id` does not exist in current config.
+
+## Deployment (GitHub Pages)
+
+Workflow is already included at `.github/workflows/pages.yml`.
+
+Publish model:
+- Push to `main` triggers Pages deployment via GitHub Actions.
+- In GitHub repo settings, ensure `Pages -> Source` is set to `GitHub Actions`.
+
+Expected URL:
+- `https://actualpugbot.github.io/mob-voice-over/`
+
+## Troubleshooting
+
+- Microphone blocked: enable browser mic permission and retry.
+- Export fails with ffmpeg load errors: confirm network access to jsDelivr/unpkg CDNs and run via local HTTP server (not `file://`).
+- No recordings found on raw import: check zip structure includes `raw/` and filenames like `raw/cow.ogg`.
+
+## Contributing
+
+Repo Git identity (local):
+
+```bash
+git config user.name "actualpug"
+git config user.email "actualpug@gmail.com"
 ```
 
-3. Use the two sections:
-- `Record`: capture and accept each mob voice, or import a raw recordings zip to skip straight to review/export
-- `Export`: download the resource pack zip, download raw recordings, or import raw recordings from a previous session
+Recommended flow:
 
-4. Drop the zip into Minecraft Java `resourcepacks/`, then enable it in-game.
-
-## Configuration
-
-Edit `public/mob_config.json`.
-
-Each mob entry includes:
-
-- `id`: exported file path key (`mobvoices/<id>/voice.ogg`)
-- `mob`: display name
-- `image`: local mob image path
-- `promptText`, `lengthHintMs`, `styleHints`
-- `soundEventKeys`: event keys that all map to the same recording
-
-Version compatibility preset includes:
-
-- `versionPresets[0].packFormat`: exported `pack.pack_format`
-- `versionPresets[0].supportedFormats.min/max` (optional): exported as `pack.min_format/max_format` and `pack.supported_formats.min_inclusive/max_inclusive`
-
-## Output Structure
-
-- `pack.mcmeta`
-- `pack.png` (placeholder icon)
-- `assets/minecraft/sounds.json`
-- `assets/minecraft/sounds/mobvoices/<mob-id>/voice.ogg`
-- `MobVoiceOver_raw_recordings.zip` contains:
-- `raw/<mob-id>.ogg` for each accepted recording
-- `raw/manifest.json` with clip metadata for re-import
-
-## Notes
-
-- First export loads `ffmpeg.wasm` from CDN and can take several seconds.
-- Recordings are auto-mastered on conversion/export (compression + loudness normalization + limiting) to keep levels more consistent in-game.
-- Chrome/Chromium is the MVP target browser.
+```bash
+git add .
+git commit -m "Describe change"
+git push origin main
+```
