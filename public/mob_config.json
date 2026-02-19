@@ -89,7 +89,7 @@
         {
           "id": "chicken",
           "mob": "Chicken",
-          "image": "public/assets/mobs/chicken.png",
+          "image": "public/assets/mobs/chicken.gif",
           "lengthHintMs": 1000,
           "styleHints": [],
           "soundEventKeys": [
@@ -99,7 +99,7 @@
         {
           "id": "ghast",
           "mob": "Ghast",
-          "image": "public/assets/mobs/ghast.png",
+          "image": "public/assets/mobs/ghast.gif",
           "lengthHintMs": 1000,
           "styleHints": [],
           "soundEventKeys": [
@@ -109,7 +109,7 @@
         {
           "id": "horse",
           "mob": "Horse",
-          "image": "public/assets/mobs/horse.png",
+          "image": "public/assets/mobs/horse.gif",
           "lengthHintMs": 1000,
           "styleHints": [],
           "soundEventKeys": [
@@ -119,7 +119,7 @@
         {
           "id": "dolphin",
           "mob": "Dolphin",
-          "image": "public/assets/mobs/dolphin.png",
+          "image": "public/assets/mobs/dolphin.gif",
           "lengthHintMs": 1000,
           "styleHints": [],
           "soundEventKeys": [

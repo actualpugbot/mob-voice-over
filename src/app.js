@@ -4,6 +4,137 @@ const PACK_NAME = "Mob Voice Over";
 const PACK_DESCRIPTION = "Mob voices recorded with Mob Voice Over";
 const DEFAULT_PACK_FORMAT = 75;
 const DEFAULT_MOB_IMAGE = "public/assets/mobs/unknown_mob.png";
+const DEFAULT_MOB_SET_ID = "basic";
+const EXTRA_MOB_IMAGE_EXTENSIONS = Object.freeze({
+  camel_husk: "gif",
+  copper_golem: "png",
+  happy_ghast: "gif",
+  nautilus: "gif",
+  parched: "png",
+  zombie_nautilus: "gif"
+});
+const EXTRA_MOB_IDS = Object.freeze(Object.keys(EXTRA_MOB_IMAGE_EXTENSIONS));
+const MOB_SOUND_EVENT_OVERRIDES = Object.freeze({
+  allay: [
+    "entity.allay.ambient_with_item",
+    "entity.allay.ambient_without_item",
+    "entity.allay.hurt",
+    "entity.allay.death",
+    "entity.allay.item_given",
+    "entity.allay.item_taken"
+  ],
+  axolotl: [
+    "entity.axolotl.idle_air",
+    "entity.axolotl.idle_water",
+    "entity.axolotl.swim",
+    "entity.axolotl.hurt",
+    "entity.axolotl.death"
+  ],
+  bee: [
+    "entity.bee.loop",
+    "entity.bee.pollinate",
+    "entity.bee.hurt",
+    "entity.bee.death",
+    "entity.bee.sting"
+  ],
+  breeze: [
+    "entity.breeze.idle_ground",
+    "entity.breeze.idle_air",
+    "entity.breeze.charge",
+    "entity.breeze.jump",
+    "entity.breeze.hurt",
+    "entity.breeze.death"
+  ],
+  camel_husk: ["entity.camel_husk.ambient", "entity.camel_husk.hurt", "entity.camel_husk.death"],
+  cat: ["entity.cat.ambient", "entity.cat.purr", "entity.cat.purreow", "entity.cat.hurt", "entity.cat.death"],
+  copper_golem: ["entity.copper_golem.ambient", "entity.copper_golem.hurt", "entity.copper_golem.death"],
+  elder_guardian: [
+    "entity.elder_guardian.ambient",
+    "entity.elder_guardian.ambient_land",
+    "entity.elder_guardian.curse",
+    "entity.elder_guardian.hurt",
+    "entity.elder_guardian.death",
+    "entity.elder_guardian.flop"
+  ],
+  guardian: [
+    "entity.guardian.ambient",
+    "entity.guardian.ambient_land",
+    "entity.guardian.attack",
+    "entity.guardian.hurt",
+    "entity.guardian.death",
+    "entity.guardian.flop"
+  ],
+  happy_ghast: ["entity.happy_ghast.ambient", "entity.happy_ghast.hurt", "entity.happy_ghast.death"],
+  hoglin: [
+    "entity.hoglin.ambient",
+    "entity.hoglin.angry",
+    "entity.hoglin.retreat",
+    "entity.hoglin.hurt",
+    "entity.hoglin.death",
+    "entity.hoglin.step"
+  ],
+  iron_golem: [
+    "entity.iron_golem.attack",
+    "entity.iron_golem.hurt",
+    "entity.iron_golem.damage",
+    "entity.iron_golem.death",
+    "entity.iron_golem.step",
+    "entity.iron_golem.repair"
+  ],
+  magma_cube: [
+    "entity.magma_cube.squish",
+    "entity.magma_cube.squish_small",
+    "entity.magma_cube.jump",
+    "entity.magma_cube.hurt",
+    "entity.magma_cube.death",
+    "entity.magma_cube.death_small"
+  ],
+  nautilus: ["entity.nautilus.ambient", "entity.nautilus.hurt", "entity.nautilus.death"],
+  parched: ["entity.parched.ambient", "entity.parched.hurt", "entity.parched.death"],
+  piglin: [
+    "entity.piglin.ambient",
+    "entity.piglin.angry",
+    "entity.piglin.jealous",
+    "entity.piglin.retreat",
+    "entity.piglin.hurt",
+    "entity.piglin.death",
+    "entity.piglin.step"
+  ],
+  pufferfish: [
+    "entity.puffer_fish.flop",
+    "entity.puffer_fish.hurt",
+    "entity.puffer_fish.death",
+    "entity.puffer_fish.blow_up",
+    "entity.puffer_fish.blow_out",
+    "entity.puffer_fish.sting"
+  ],
+  slime: [
+    "entity.slime.squish",
+    "entity.slime.jump",
+    "entity.slime.hurt",
+    "entity.slime.death",
+    "entity.slime.attack"
+  ],
+  sniffer: [
+    "entity.sniffer.idle",
+    "entity.sniffer.searching",
+    "entity.sniffer.sniffing",
+    "entity.sniffer.digging",
+    "entity.sniffer.hurt",
+    "entity.sniffer.death",
+    "entity.sniffer.happy"
+  ],
+  tadpole: ["entity.tadpole.flop", "entity.tadpole.hurt", "entity.tadpole.death", "entity.tadpole.grow_up"],
+  turtle: [
+    "entity.turtle.ambient_land",
+    "entity.turtle.ambient_water",
+    "entity.turtle.hurt",
+    "entity.turtle.death",
+    "entity.turtle.shamble",
+    "entity.turtle.flop"
+  ],
+  zombie_nautilus: ["entity.zombie_nautilus.ambient", "entity.zombie_nautilus.hurt", "entity.zombie_nautilus.death"]
+});
 const VANILLA_MOB_IDS = [
   "allay",
   "armadillo",
@@ -87,8 +218,45 @@ const VANILLA_MOB_IDS = [
   "zombie_villager",
   "zombified_piglin"
 ];
+const KNOWN_MOB_IDS = Object.freeze([...new Set([...VANILLA_MOB_IDS, ...EXTRA_MOB_IDS])]);
 const TOTAL_VANILLA_MOBS = VANILLA_MOB_IDS.length;
-const GIF_MOB_IMAGE_IDS = new Set(["cod", "pufferfish", "salmon"]);
+const GIF_MOB_IMAGE_IDS = new Set([
+  "allay",
+  "armadillo",
+  "axolotl",
+  "bat",
+  "bee",
+  "blaze",
+  "camel",
+  "chicken",
+  "cod",
+  "dolphin",
+  "elder_guardian",
+  "ender_dragon",
+  "endermite",
+  "fox",
+  "ghast",
+  "glow_squid",
+  "goat",
+  "guardian",
+  "hoglin",
+  "horse",
+  "magma_cube",
+  "panda",
+  "phantom",
+  "polar_bear",
+  "pufferfish",
+  "salmon",
+  "silverfish",
+  "slime",
+  "sniffer",
+  "squid",
+  "strider",
+  "tadpole",
+  "vex",
+  "warden",
+  "zoglin",
+]);
 
 const state = {
   config: null,
@@ -142,6 +310,8 @@ const normalizeMobId = (value) =>
     .replace(/^_+|_+$/g, "");
 
 const defaultImageForMob = (id) => {
+  const extraExt = EXTRA_MOB_IMAGE_EXTENSIONS[id];
+  if (extraExt) return `public/assets/mobs/${id}.${extraExt}`;
   if (!VANILLA_MOB_IDS.includes(id)) return DEFAULT_MOB_IMAGE;
   const ext = GIF_MOB_IMAGE_IDS.has(id) ? "gif" : "png";
   return `public/assets/mobs/${id}.${ext}`;
@@ -157,6 +327,28 @@ function hydrateMobEntry(mob) {
   };
 }
 
+function defaultSoundEventKeysForMob(id) {
+  const cleanId = normalizeMobId(id);
+  const override = MOB_SOUND_EVENT_OVERRIDES[cleanId];
+  if (Array.isArray(override) && override.length) {
+    return [...new Set(override.map((key) => String(key || "").trim()).filter(Boolean))];
+  }
+  return [`entity.${cleanId}.ambient`];
+}
+
+function resolveSoundEventKeysForMob(mob) {
+  const cleanId = normalizeMobId(mob?.id);
+  const configured = Array.isArray(mob?.soundEventKeys)
+    ? [...new Set(mob.soundEventKeys.map((key) => String(key || "").trim()).filter(Boolean))]
+    : [];
+  if (!configured.length) return defaultSoundEventKeysForMob(cleanId);
+  const isSingleAmbientFallback = configured.length === 1 && configured[0] === `entity.${cleanId}.ambient`;
+  if (isSingleAmbientFallback && MOB_SOUND_EVENT_OVERRIDES[cleanId]?.length) {
+    return defaultSoundEventKeysForMob(cleanId);
+  }
+  return configured;
+}
+
 function createMobDefinition(id, overrides = {}) {
   const cleanId = normalizeMobId(id);
   const name = overrides.mob || toTitleCase(cleanId);
@@ -168,7 +360,7 @@ function createMobDefinition(id, overrides = {}) {
     styleHints: [],
     soundEventKeys: Array.isArray(overrides.soundEventKeys) && overrides.soundEventKeys.length
       ? overrides.soundEventKeys
-      : [`entity.${cleanId}.ambient`]
+      : defaultSoundEventKeysForMob(cleanId)
   };
 }
 
@@ -177,12 +369,37 @@ function allMobOptions() {
   VANILLA_MOB_IDS.forEach((id) => {
     map.set(id, { id, label: toTitleCase(id) });
   });
+  EXTRA_MOB_IDS.forEach((id) => {
+    map.set(id, { id, label: toTitleCase(id) });
+  });
   state.mobs.forEach((mob) => {
     const id = normalizeMobId(mob.id);
     if (!id) return;
     map.set(id, { id, label: mob.mob || toTitleCase(id) });
   });
   return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function imageCandidatesForMob(id, preferredPath) {
+  const cleanId = normalizeMobId(id);
+  const candidates = [preferredPath, `public/assets/mobs/${cleanId}.gif`, `public/assets/mobs/${cleanId}.png`, DEFAULT_MOB_IMAGE];
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function wireMobImageFallback(imgEl, id, preferredPath) {
+  const candidates = imageCandidatesForMob(id, preferredPath);
+  if (!candidates.length) return;
+  let idx = Math.max(0, candidates.indexOf(imgEl.getAttribute("src")));
+  if (idx === -1) idx = 0;
+  imgEl.src = candidates[idx];
+  imgEl.onerror = () => {
+    idx += 1;
+    if (idx < candidates.length) {
+      imgEl.src = candidates[idx];
+      return;
+    }
+    imgEl.onerror = null;
+  };
 }
 
 function parseMobInput(rawInput) {
@@ -200,8 +417,17 @@ function vanillaMobCoverageCount() {
   return VANILLA_MOB_IDS.reduce((count, id) => (currentIds.has(id) ? count + 1 : count), 0);
 }
 
+function knownMobCoverageCount() {
+  const currentIds = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
+  return KNOWN_MOB_IDS.reduce((count, id) => (currentIds.has(id) ? count + 1 : count), 0);
+}
+
 function hasAllVanillaMobs() {
   return vanillaMobCoverageCount() >= TOTAL_VANILLA_MOBS;
+}
+
+function hasAllKnownMobs() {
+  return knownMobCoverageCount() >= KNOWN_MOB_IDS.length;
 }
 
 const el = (html) => {
@@ -213,7 +439,7 @@ const el = (html) => {
 async function boot() {
   const res = await fetch("public/mob_config.json");
   state.config = await res.json();
-  state.mobs = resolveMobSet("basic");
+  state.mobs = resolveMobSet(DEFAULT_MOB_SET_ID);
   render();
 }
 
@@ -233,7 +459,7 @@ function resetWorkflow() {
   state.mobs.forEach((mob) => {
     if (mob?.recording?.url) URL.revokeObjectURL(mob.recording.url);
   });
-  state.mobs = resolveMobSet("basic");
+  state.mobs = resolveMobSet(DEFAULT_MOB_SET_ID);
   state.step = 0;
   state.recordIndex = 0;
   state.busyMsg = "";
@@ -245,6 +471,15 @@ function resetWorkflow() {
   state.recordNotice = "";
 }
 
+function baseMobCount() {
+  return resolveMobSet(DEFAULT_MOB_SET_ID).length;
+}
+
+function appendMobAfterBaseSet(mob) {
+  const insertAt = Math.max(baseMobCount(), state.mobs.length);
+  state.mobs.splice(insertAt, 0, mob);
+}
+
 function upsertMobFromInput(rawInput, overrides = {}) {
   const parsed = parseMobInput(rawInput);
   if (!parsed?.id) {
@@ -254,33 +489,29 @@ function upsertMobFromInput(rawInput, overrides = {}) {
 
   const existingIdx = state.mobs.findIndex((mob) => mob.id === parsed.id);
   if (existingIdx >= 0) {
-    state.recordIndex = existingIdx;
-    state.recordNotice = `${state.mobs[existingIdx].mob} is already in your list. Jumped to it.`;
+    state.recordNotice = `${state.mobs[existingIdx].mob} is already in your list.`;
     return;
   }
 
   const mobDef = createMobDefinition(parsed.id, { mob: parsed.mob, ...overrides });
-  state.mobs.push(hydrateMobEntry(mobDef));
-  state.recordIndex = state.mobs.length - 1;
-  state.recordNotice = `${mobDef.mob} added to your recording list.`;
+  appendMobAfterBaseSet(hydrateMobEntry(mobDef));
+  state.recordNotice = `${mobDef.mob} added after the starter mobs.`;
 }
 
 function addAllVanillaMobs() {
   const existing = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
-  const firstNewIndex = state.mobs.length;
   let added = 0;
 
   for (let i = 0; i < VANILLA_MOB_IDS.length; i += 1) {
     const id = VANILLA_MOB_IDS[i];
     if (!id || existing.has(id)) continue;
-    state.mobs.push(hydrateMobEntry(createMobDefinition(id)));
+    appendMobAfterBaseSet(hydrateMobEntry(createMobDefinition(id)));
     existing.add(id);
     added += 1;
   }
 
   if (added > 0) {
-    state.recordIndex = firstNewIndex;
-    state.recordNotice = `Added ${added} mob(s) to your recording list.`;
+    state.recordNotice = `Added ${added} mob(s) after the starter mobs.`;
   } else {
     state.recordNotice = `All ${TOTAL_VANILLA_MOBS} vanilla mobs are already in your list.`;
   }
@@ -295,21 +526,19 @@ function addSelectedMobs(selectedIds) {
 
   const existing = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
   const optionsById = new Map(allMobOptions().map((opt) => [opt.id, opt.label]));
-  const firstNewIndex = state.mobs.length;
   let added = 0;
 
   for (let i = 0; i < normalizedIds.length; i += 1) {
     const id = normalizedIds[i];
     if (existing.has(id)) continue;
     const label = optionsById.get(id) || toTitleCase(id);
-    state.mobs.push(hydrateMobEntry(createMobDefinition(id, { mob: label })));
+    appendMobAfterBaseSet(hydrateMobEntry(createMobDefinition(id, { mob: label })));
     existing.add(id);
     added += 1;
   }
 
   if (added > 0) {
-    state.recordIndex = firstNewIndex;
-    state.recordNotice = `Added ${added} mob(s) to your recording list.`;
+    state.recordNotice = `Added ${added} mob(s) after the starter mobs.`;
   } else {
     state.recordNotice = "Those mobs are already in your list.";
   }
@@ -384,7 +613,7 @@ function renderRecord(root) {
   const isPreviewPlaying = state.previewMobId === mob.id && Boolean(state.previewAudio);
   const mobOptions = allMobOptions();
   const existingMobIds = new Set(state.mobs.map((m) => normalizeMobId(m.id)));
-  const canAddMoreMobs = !hasAllVanillaMobs();
+  const canAddMoreMobs = !hasAllKnownMobs();
   if (!canAddMoreMobs && state.showAddMobPanel) {
     state.showAddMobPanel = false;
   }
@@ -489,6 +718,10 @@ function renderRecord(root) {
       toggleMobPreview(mob);
     };
   }
+  const mobImg = root.querySelector(".mob-card.single img");
+  if (mobImg) {
+    wireMobImageFallback(mobImg, mob.id, mob.image);
+  }
 
   const micBtn = root.querySelector("#enable-mic");
   if (micBtn) {
@@ -586,9 +819,7 @@ function renderExport(root) {
           <button id="build" class="big-btn danger-btn" ${ready.length ? "" : "disabled"}>Download Pack</button>
           <button id="raw" class="ghost-btn" ${ready.length ? "" : "disabled"}>Download Raw Recordings</button>
           <button id="import" class="ghost-btn">Import Raw Recordings</button>
-          ${
-            hasAllVanillaMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Missing a mob? Add it!</button>'
-          }
+          ${hasAllKnownMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Missing a mob? Add it!</button>'}
           <button id="restart" class="ghost-btn">Start Over</button>
         </div>
         <p id="busy" class="note"></p>
@@ -1201,7 +1432,9 @@ async function buildAndDownloadPack() {
       zip.file(`assets/minecraft/sounds/${targetSoundPath}.ogg`, ogg);
       logExport(`Wrote ${targetSoundPath}.ogg`);
 
-      mob.soundEventKeys.forEach((eventKey) => {
+      const soundEventKeys = resolveSoundEventKeysForMob(mob);
+      mob.soundEventKeys = soundEventKeys;
+      soundEventKeys.forEach((eventKey) => {
         soundsJson[eventKey] = {
           replace: true,
           sounds: [{ name: targetSoundPath, stream: false }]
@@ -1258,7 +1491,12 @@ async function downloadRawRecordings() {
       const ogg = await toOgg(mob.recording.blob, mob.id);
       const file = `raw/${mob.id}.ogg`;
       zip.file(file, ogg);
-      manifest.clips.push({ mob: mob.id, mimeType: "audio/ogg", file, soundEventKeys: mob.soundEventKeys });
+      manifest.clips.push({
+        mob: mob.id,
+        mimeType: "audio/ogg",
+        file,
+        soundEventKeys: resolveSoundEventKeysForMob(mob)
+      });
     }
     zip.file("raw/manifest.json", JSON.stringify(manifest, null, 2));
     const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
