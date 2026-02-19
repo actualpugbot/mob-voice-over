@@ -15,6 +15,17 @@
       "label": "Full (22 mobs)",
       "mobs": [
         {
+          "id": "zombie",
+          "mob": "Zombie",
+          "image": "public/assets/mobs/zombie.png",
+          "promptText": "A drawn-out groan from someone having a long week.",
+          "lengthHintMs": 1000,
+          "styleHints": [],
+          "soundEventKeys": [
+            "entity.zombie.ambient"
+          ]
+        },
+        {
           "id": "cow",
           "mob": "Cow",
           "image": "public/assets/mobs/cow.png",
@@ -23,6 +34,17 @@
           "styleHints": [],
           "soundEventKeys": [
             "entity.cow.ambient"
+          ]
+        },
+        {
+          "id": "creeper",
+          "mob": "Creeper",
+          "image": "public/assets/mobs/creeper.png",
+          "promptText": "A restrained hiss from an enthusiast of close proximity.",
+          "lengthHintMs": 1000,
+          "styleHints": [],
+          "soundEventKeys": [
+            "entity.creeper.ambient"
           ]
         },
         {
@@ -37,6 +59,17 @@
           ]
         },
         {
+          "id": "spider",
+          "mob": "Spider",
+          "image": "public/assets/mobs/spider.png",
+          "promptText": "Dry little clicks, then skittering with purpose.",
+          "lengthHintMs": 1000,
+          "styleHints": [],
+          "soundEventKeys": [
+            "entity.spider.ambient"
+          ]
+        },
+        {
           "id": "sheep",
           "mob": "Sheep",
           "image": "public/assets/mobs/sheep.png",
@@ -45,6 +78,17 @@
           "styleHints": [],
           "soundEventKeys": [
             "entity.sheep.ambient"
+          ]
+        },
+        {
+          "id": "enderman",
+          "mob": "Enderman",
+          "image": "public/assets/mobs/enderman.png",
+          "promptText": "A thin, odd murmur with noticeable signal issues.",
+          "lengthHintMs": 1000,
+          "styleHints": [],
+          "soundEventKeys": [
+            "entity.enderman.ambient"
           ]
         },
         {
@@ -59,6 +103,17 @@
           ]
         },
         {
+          "id": "ghast",
+          "mob": "Ghast",
+          "image": "public/assets/mobs/ghast.png",
+          "promptText": "A distant wail with all the optimism of drizzle.",
+          "lengthHintMs": 1000,
+          "styleHints": [],
+          "soundEventKeys": [
+            "entity.ghast.ambient"
+          ]
+        },
+        {
           "id": "horse",
           "mob": "Horse",
           "image": "public/assets/mobs/horse.png",
@@ -67,6 +122,17 @@
           "styleHints": [],
           "soundEventKeys": [
             "entity.horse.ambient"
+          ]
+        },
+        {
+          "id": "dolphin",
+          "mob": "Dolphin",
+          "image": "public/assets/mobs/dolphin.png",
+          "promptText": "Bright squeaks from someone overly pleased with water.",
+          "lengthHintMs": 1000,
+          "styleHints": [],
+          "soundEventKeys": [
+            "entity.dolphin.ambient"
           ]
         },
         {
@@ -111,72 +177,6 @@
           "styleHints": [],
           "soundEventKeys": [
             "entity.villager.ambient"
-          ]
-        },
-        {
-          "id": "zombie",
-          "mob": "Zombie",
-          "image": "public/assets/mobs/zombie.png",
-          "promptText": "A drawn-out groan from someone having a long week.",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.zombie.ambient"
-          ]
-        },
-        {
-          "id": "creeper",
-          "mob": "Creeper",
-          "image": "public/assets/mobs/creeper.png",
-          "promptText": "A restrained hiss from an enthusiast of close proximity.",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.creeper.ambient"
-          ]
-        },
-        {
-          "id": "spider",
-          "mob": "Spider",
-          "image": "public/assets/mobs/spider.png",
-          "promptText": "Dry little clicks, then skittering with purpose.",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.spider.ambient"
-          ]
-        },
-        {
-          "id": "enderman",
-          "mob": "Enderman",
-          "image": "public/assets/mobs/enderman.png",
-          "promptText": "A thin, odd murmur with noticeable signal issues.",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.enderman.ambient"
-          ]
-        },
-        {
-          "id": "dolphin",
-          "mob": "Dolphin",
-          "image": "public/assets/mobs/dolphin.png",
-          "promptText": "Bright squeaks from someone overly pleased with water.",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.dolphin.ambient"
-          ]
-        },
-        {
-          "id": "ghast",
-          "mob": "Ghast",
-          "image": "public/assets/mobs/ghast.png",
-          "promptText": "A distant wail with all the optimism of drizzle.",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.ghast.ambient"
           ]
         }
       ]
