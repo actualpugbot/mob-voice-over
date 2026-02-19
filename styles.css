@@ -209,6 +209,7 @@ summary:focus-visible {
 .mob-card img {
   width: 100%;
   height: clamp(220px, 34vw, 320px);
+  padding-block: 12px;
   border: 1px solid #3a4e70;
   border-radius: 14px;
   background: radial-gradient(circle at 50% 20%, #121d31, #09101c 70%);
@@ -221,20 +222,18 @@ summary:focus-visible {
 
 .mob-card figcaption {
   display: grid;
-  gap: 9px;
+  gap: 6px;
   justify-items: center;
   text-align: center;
 }
 
 .nameplate {
-  display: inline-block;
-  min-width: 172px;
+  font-size: clamp(1.4rem, 3.6vw, 2rem);
+  font-weight: 800;
+  letter-spacing: 0.35px;
+  line-height: 1.1;
   color: var(--text);
-  background: linear-gradient(180deg, #1e2b44, #1a273d);
-  border: 1px solid #42597f;
-  border-radius: 999px;
-  padding: 7px 16px;
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  text-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
 }
 
 .meter-row {
@@ -449,6 +448,86 @@ summary:focus-visible {
   color: var(--text);
   background: linear-gradient(180deg, #1a263d, #172236);
   border-color: #49658f;
+}
+
+.text-link-btn {
+  border: 0;
+  background: transparent;
+  color: #9ed2ff;
+  text-align: left;
+  padding: 0;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.text-link-btn:hover:not(:disabled) {
+  color: #b9deff;
+  text-decoration: underline;
+  border: 0;
+  box-shadow: none;
+}
+
+.add-mob-form {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #304664;
+  border-radius: 12px;
+  padding: 10px;
+  background: #101b2d;
+  width: min(100%, 560px);
+}
+
+.add-mob-form label {
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.add-mob-form input {
+  width: 100%;
+  padding: 9px 11px;
+  background: #0d1626;
+  color: var(--text);
+}
+
+.mob-checklist {
+  width: 100%;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid #304664;
+  border-radius: 10px;
+  background: #0d1626;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.mob-check-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+.mob-check-item:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mob-check-item input[type="checkbox"] {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.mob-check-item.is-existing {
+  opacity: 0.7;
+}
+
+.add-mob-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 audio {
@@ -712,6 +791,10 @@ audio {
 
   .tiny-btn {
     min-width: 0;
+  }
+
+  .add-mob-actions {
+    grid-template-columns: 1fr;
   }
 }
 

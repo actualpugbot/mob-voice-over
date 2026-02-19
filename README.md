@@ -62,7 +62,6 @@ Top-level fields used by code:
   - `id`
   - `mob`
   - `image`
-  - `promptText`
   - `lengthHintMs` (present for authoring; app currently enforces a fixed 5s max)
   - `styleHints`
   - `soundEventKeys` (all mapped to the same recorded clip)

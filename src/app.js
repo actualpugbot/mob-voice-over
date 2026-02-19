@@ -3,6 +3,92 @@ const app = document.getElementById("app");
 const PACK_NAME = "Mob Voice Over";
 const PACK_DESCRIPTION = "Mob voices recorded with Mob Voice Over";
 const DEFAULT_PACK_FORMAT = 75;
+const DEFAULT_MOB_IMAGE = "public/assets/mobs/unknown_mob.png";
+const VANILLA_MOB_IDS = [
+  "allay",
+  "armadillo",
+  "axolotl",
+  "bat",
+  "bee",
+  "blaze",
+  "bogged",
+  "breeze",
+  "camel",
+  "cat",
+  "cave_spider",
+  "chicken",
+  "cod",
+  "cow",
+  "creaking",
+  "creeper",
+  "dolphin",
+  "donkey",
+  "drowned",
+  "elder_guardian",
+  "ender_dragon",
+  "enderman",
+  "endermite",
+  "evoker",
+  "fox",
+  "frog",
+  "ghast",
+  "glow_squid",
+  "goat",
+  "guardian",
+  "hoglin",
+  "horse",
+  "husk",
+  "iron_golem",
+  "llama",
+  "magma_cube",
+  "mooshroom",
+  "mule",
+  "ocelot",
+  "panda",
+  "parrot",
+  "phantom",
+  "pig",
+  "piglin",
+  "piglin_brute",
+  "pillager",
+  "polar_bear",
+  "pufferfish",
+  "rabbit",
+  "ravager",
+  "salmon",
+  "sheep",
+  "shulker",
+  "silverfish",
+  "skeleton",
+  "skeleton_horse",
+  "slime",
+  "sniffer",
+  "snow_golem",
+  "spider",
+  "squid",
+  "stray",
+  "strider",
+  "tadpole",
+  "trader_llama",
+  "tropical_fish",
+  "turtle",
+  "vex",
+  "villager",
+  "vindicator",
+  "wandering_trader",
+  "warden",
+  "witch",
+  "wither",
+  "wither_skeleton",
+  "wolf",
+  "zoglin",
+  "zombie",
+  "zombie_horse",
+  "zombie_villager",
+  "zombified_piglin"
+];
+const TOTAL_VANILLA_MOBS = VANILLA_MOB_IDS.length;
+const GIF_MOB_IMAGE_IDS = new Set(["cod", "pufferfish", "salmon"]);
 
 const state = {
   config: null,
@@ -34,8 +120,89 @@ const state = {
   exportLogs: [],
   lastZipName: "",
   previewAudio: null,
-  previewMobId: null
+  previewMobId: null,
+  showAddMobPanel: false,
+  addMobInput: "",
+  recordNotice: ""
 };
+
+const toTitleCase = (text) =>
+  String(text)
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+
+const normalizeMobId = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9 _-]/g, "")
+    .replace(/[\s-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const defaultImageForMob = (id) => {
+  if (!VANILLA_MOB_IDS.includes(id)) return DEFAULT_MOB_IMAGE;
+  const ext = GIF_MOB_IMAGE_IDS.has(id) ? "gif" : "png";
+  return `public/assets/mobs/${id}.${ext}`;
+};
+
+function hydrateMobEntry(mob) {
+  return {
+    ...mob,
+    recording: null,
+    accepted: false,
+    seconds: 0,
+    converting: false
+  };
+}
+
+function createMobDefinition(id, overrides = {}) {
+  const cleanId = normalizeMobId(id);
+  const name = overrides.mob || toTitleCase(cleanId);
+  return {
+    id: cleanId,
+    mob: name,
+    image: overrides.image || defaultImageForMob(cleanId),
+    lengthHintMs: 1000,
+    styleHints: [],
+    soundEventKeys: Array.isArray(overrides.soundEventKeys) && overrides.soundEventKeys.length
+      ? overrides.soundEventKeys
+      : [`entity.${cleanId}.ambient`]
+  };
+}
+
+function allMobOptions() {
+  const map = new Map();
+  VANILLA_MOB_IDS.forEach((id) => {
+    map.set(id, { id, label: toTitleCase(id) });
+  });
+  state.mobs.forEach((mob) => {
+    const id = normalizeMobId(mob.id);
+    if (!id) return;
+    map.set(id, { id, label: mob.mob || toTitleCase(id) });
+  });
+  return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function parseMobInput(rawInput) {
+  const clean = normalizeMobId(rawInput);
+  if (!clean) return null;
+  const option = allMobOptions().find((m) => m.id === clean);
+  return {
+    id: clean,
+    mob: option?.label || toTitleCase(clean)
+  };
+}
+
+function vanillaMobCoverageCount() {
+  const currentIds = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
+  return VANILLA_MOB_IDS.reduce((count, id) => (currentIds.has(id) ? count + 1 : count), 0);
+}
+
+function hasAllVanillaMobs() {
+  return vanillaMobCoverageCount() >= TOTAL_VANILLA_MOBS;
+}
 
 const el = (html) => {
   const t = document.createElement("template");
@@ -54,13 +221,7 @@ function resolveMobSet(setId) {
   const set = state.config.mobSets[setId];
   if (!set) return [];
   const base = set.extends ? resolveMobSet(set.extends) : [];
-  return [...base, ...(set.mobs || [])].map((mob) => ({
-    ...mob,
-    recording: null,
-    accepted: false,
-    seconds: 0,
-    converting: false
-  }));
+  return [...base, ...(set.mobs || [])].map((mob) => hydrateMobEntry(mob));
 }
 
 function currentMob() {
@@ -79,6 +240,79 @@ function resetWorkflow() {
   state.exportLog = "";
   state.exportLogs = [];
   state.lastZipName = "";
+  state.showAddMobPanel = false;
+  state.addMobInput = "";
+  state.recordNotice = "";
+}
+
+function upsertMobFromInput(rawInput, overrides = {}) {
+  const parsed = parseMobInput(rawInput);
+  if (!parsed?.id) {
+    state.recordNotice = "Enter a valid mob name or id first.";
+    return;
+  }
+
+  const existingIdx = state.mobs.findIndex((mob) => mob.id === parsed.id);
+  if (existingIdx >= 0) {
+    state.recordIndex = existingIdx;
+    state.recordNotice = `${state.mobs[existingIdx].mob} is already in your list. Jumped to it.`;
+    return;
+  }
+
+  const mobDef = createMobDefinition(parsed.id, { mob: parsed.mob, ...overrides });
+  state.mobs.push(hydrateMobEntry(mobDef));
+  state.recordIndex = state.mobs.length - 1;
+  state.recordNotice = `${mobDef.mob} added to your recording list.`;
+}
+
+function addAllVanillaMobs() {
+  const existing = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
+  const firstNewIndex = state.mobs.length;
+  let added = 0;
+
+  for (let i = 0; i < VANILLA_MOB_IDS.length; i += 1) {
+    const id = VANILLA_MOB_IDS[i];
+    if (!id || existing.has(id)) continue;
+    state.mobs.push(hydrateMobEntry(createMobDefinition(id)));
+    existing.add(id);
+    added += 1;
+  }
+
+  if (added > 0) {
+    state.recordIndex = firstNewIndex;
+    state.recordNotice = `Added ${added} mob(s) to your recording list.`;
+  } else {
+    state.recordNotice = `All ${TOTAL_VANILLA_MOBS} vanilla mobs are already in your list.`;
+  }
+}
+
+function addSelectedMobs(selectedIds) {
+  const normalizedIds = [...new Set(selectedIds.map((id) => normalizeMobId(id)).filter(Boolean))];
+  if (!normalizedIds.length) {
+    state.recordNotice = "Pick at least one mob from the quick list.";
+    return;
+  }
+
+  const existing = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
+  const optionsById = new Map(allMobOptions().map((opt) => [opt.id, opt.label]));
+  const firstNewIndex = state.mobs.length;
+  let added = 0;
+
+  for (let i = 0; i < normalizedIds.length; i += 1) {
+    const id = normalizedIds[i];
+    if (existing.has(id)) continue;
+    const label = optionsById.get(id) || toTitleCase(id);
+    state.mobs.push(hydrateMobEntry(createMobDefinition(id, { mob: label })));
+    existing.add(id);
+    added += 1;
+  }
+
+  if (added > 0) {
+    state.recordIndex = firstNewIndex;
+    state.recordNotice = `Added ${added} mob(s) to your recording list.`;
+  } else {
+    state.recordNotice = "Those mobs are already in your list.";
+  }
 }
 
 function maxRecordingMs(mob) {
@@ -148,6 +382,12 @@ function renderRecord(root) {
   const ringPct = Math.round((Math.max(0, remainingMs) / maxMs) * 100);
   const isLastMob = state.recordIndex === state.mobs.length - 1;
   const isPreviewPlaying = state.previewMobId === mob.id && Boolean(state.previewAudio);
+  const mobOptions = allMobOptions();
+  const existingMobIds = new Set(state.mobs.map((m) => normalizeMobId(m.id)));
+  const canAddMoreMobs = !hasAllVanillaMobs();
+  if (!canAddMoreMobs && state.showAddMobPanel) {
+    state.showAddMobPanel = false;
+  }
 
   root.insertAdjacentHTML(
     "beforeend",
@@ -160,7 +400,6 @@ function renderRecord(root) {
         <img alt="${escapeHtml(mob.mob)}" src="${escapeHtml(mob.image)}" referrerpolicy="no-referrer" />
         <figcaption>
           <h3 class="nameplate">${escapeHtml(mob.mob)}</h3>
-          <p>${escapeHtml(mob.promptText)}</p>
         </figcaption>
       </figure>
       <div class="meter-row">
@@ -206,6 +445,41 @@ function renderRecord(root) {
         <button id="import-raw-first" class="ghost-btn" ${state.isRecording ? "disabled" : ""}>Import Raw Recordings</button>
         <input id="raw-import-first" type="file" accept=".zip,application/zip" hidden />
       </div>
+      ${
+        canAddMoreMobs || state.recordNotice
+          ? `<div class="stack">
+          ${
+            canAddMoreMobs
+              ? `<button id="toggle-add-mob" class="text-link-btn" ${state.isRecording || mob.converting ? "disabled" : ""}>Missing a mob? Add it!</button>`
+              : ""
+          }
+          ${
+            canAddMoreMobs && state.showAddMobPanel
+              ? `<form id="add-mob-form" class="add-mob-form">
+              <label>Quick pick mobs</label>
+              <div class="mob-checklist" id="mob-checklist">
+                ${mobOptions
+                  .map(
+                    (opt) => `<label class="mob-check-item ${existingMobIds.has(opt.id) ? "is-existing" : ""}">
+                    <input type="checkbox" name="mob-quick-pick" value="${escapeHtml(opt.id)}" ${existingMobIds.has(opt.id) ? "disabled" : ""} />
+                    <span>${escapeHtml(opt.label)}</span>
+                    ${existingMobIds.has(opt.id) ? '<span class="note">Added</span>' : ""}
+                  </label>`
+                  )
+                  .join("")}
+              </div>
+              <p class="note">Pick one or more mobs, then add the selection.</p>
+              <div class="add-mob-actions">
+                <button type="submit" class="ghost-btn">Add Selected</button>
+                <button type="button" id="add-all-mobs" class="ghost-btn">Add All Mobs</button>
+              </div>
+            </form>`
+              : ""
+          }
+          ${state.recordNotice ? `<p class="note">${escapeHtml(state.recordNotice)}</p>` : ""}
+        </div>`
+          : ""
+      }
     </section>`
   );
 
@@ -234,6 +508,34 @@ function renderRecord(root) {
     if (!file) return;
     await importRawRecordingsZip(file, { goToExport: true });
   };
+  const toggleAddMobBtn = root.querySelector("#toggle-add-mob");
+  if (toggleAddMobBtn) {
+    toggleAddMobBtn.onclick = () => {
+      state.showAddMobPanel = !state.showAddMobPanel;
+      if (!state.showAddMobPanel) state.addMobInput = "";
+      state.recordNotice = "";
+      render();
+    };
+  }
+  const addMobForm = root.querySelector("#add-mob-form");
+  if (addMobForm) {
+    addMobForm.onsubmit = (ev) => {
+      ev.preventDefault();
+      const selected = [...addMobForm.querySelectorAll('input[name="mob-quick-pick"]:checked')].map(
+        (input) => input.value
+      );
+      addSelectedMobs(selected);
+      state.showAddMobPanel = false;
+      state.addMobInput = "";
+      render();
+    };
+    root.querySelector("#add-all-mobs").onclick = () => {
+      addAllVanillaMobs();
+      state.showAddMobPanel = false;
+      state.addMobInput = "";
+      render();
+    };
+  }
   root.querySelector("#prev").onclick = () => {
     if (state.isRecording) return;
     state.recordIndex = Math.max(0, state.recordIndex - 1);
@@ -284,6 +586,9 @@ function renderExport(root) {
           <button id="build" class="big-btn danger-btn" ${ready.length ? "" : "disabled"}>Download Pack</button>
           <button id="raw" class="ghost-btn" ${ready.length ? "" : "disabled"}>Download Raw Recordings</button>
           <button id="import" class="ghost-btn">Import Raw Recordings</button>
+          ${
+            hasAllVanillaMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Missing a mob? Add it!</button>'
+          }
           <button id="restart" class="ghost-btn">Start Over</button>
         </div>
         <p id="busy" class="note"></p>
@@ -315,6 +620,15 @@ function renderExport(root) {
   root.querySelector("#import").onclick = () => {
     root.querySelector("#raw-import").click();
   };
+  const addMoreMobsBtn = root.querySelector("#add-more-mobs");
+  if (addMoreMobsBtn) {
+    addMoreMobsBtn.onclick = () => {
+      state.step = 0;
+      state.showAddMobPanel = true;
+      state.recordNotice = "";
+      render();
+    };
+  }
   root.querySelector("#restart").onclick = () => {
     resetWorkflow();
     render();
@@ -1015,11 +1329,16 @@ async function importRawRecordingsZip(file, options = {}) {
       for (let i = 0; i < manifestEntries.length; i += 1) {
         const entry = manifestEntries[i];
         const filePath = String(entry?.file || "");
-        const mobId = String(entry?.mob || mobIdFromRawPath(filePath));
+        const mobId = normalizeMobId(entry?.mob || mobIdFromRawPath(filePath));
         if (!filePath || !mobId) continue;
         const zipEntry = zip.file(filePath);
         if (!zipEntry || seen.has(mobId)) continue;
-        candidates.push({ mobId, zipEntry, mimeType: String(entry?.mimeType || "") });
+        candidates.push({
+          mobId,
+          zipEntry,
+          mimeType: String(entry?.mimeType || ""),
+          soundEventKeys: Array.isArray(entry?.soundEventKeys) ? entry.soundEventKeys : null
+        });
         seen.add(mobId);
       }
     }
@@ -1027,7 +1346,7 @@ async function importRawRecordingsZip(file, options = {}) {
     if (!candidates.length) {
       zip.forEach((relativePath, zipEntry) => {
         if (zipEntry.dir || !relativePath.startsWith("raw/") || relativePath === "raw/manifest.json") return;
-        const mobId = mobIdFromRawPath(relativePath);
+        const mobId = normalizeMobId(mobIdFromRawPath(relativePath));
         if (!mobId || seen.has(mobId)) return;
         candidates.push({ mobId, zipEntry, mimeType: "" });
         seen.add(mobId);
@@ -1042,13 +1361,15 @@ async function importRawRecordingsZip(file, options = {}) {
     }
 
     let imported = 0;
-    let skipped = 0;
     for (let i = 0; i < candidates.length; i += 1) {
       const c = candidates[i];
-      const mob = state.mobs.find((m) => m.id === c.mobId);
+      let mob = state.mobs.find((m) => m.id === c.mobId);
       if (!mob) {
-        skipped += 1;
-        continue;
+        const mobDef = createMobDefinition(c.mobId, {
+          soundEventKeys: c.soundEventKeys?.length ? c.soundEventKeys : undefined
+        });
+        mob = hydrateMobEntry(mobDef);
+        state.mobs.push(mob);
       }
 
       state.busyMsg = `Importing ${i + 1}/${candidates.length}: ${c.mobId}`;
@@ -1068,8 +1389,8 @@ async function importRawRecordingsZip(file, options = {}) {
       imported += 1;
     }
 
-    state.busyMsg = `Imported ${imported} recording(s)${skipped ? ` • skipped ${skipped} unmatched` : ""}.`;
-    logExport(`Import complete: ${imported} recording(s) loaded${skipped ? `, ${skipped} unmatched` : ""}.`);
+    state.busyMsg = `Imported ${imported} recording(s).`;
+    logExport(`Import complete: ${imported} recording(s) loaded.`);
     if (goToExport && imported > 0) {
       state.step = 1;
     }
