@@ -5,6 +5,7 @@ const PACK_DESCRIPTION = "Mob voices recorded with Mob Voice Over";
 const DEFAULT_PACK_FORMAT = 75;
 const DEFAULT_MOB_IMAGE = "public/assets/mobs/unknown_mob.png";
 const DEFAULT_MOB_SET_ID = "basic";
+const BASIC_CLIP_KEY = "__mob_default__";
 const EXTRA_MOB_IMAGE_EXTENSIONS = Object.freeze({
   camel_husk: "gif",
   copper_golem: "png",
@@ -115,6 +116,7 @@ const MOB_SOUND_EVENT_OVERRIDES = Object.freeze({
     "entity.slime.death",
     "entity.slime.attack"
   ],
+  sheep: ["entity.sheep.ambient", "entity.sheep.hurt", "entity.sheep.death"],
   sniffer: [
     "entity.sniffer.idle",
     "entity.sniffer.searching",
@@ -257,6 +259,8 @@ const GIF_MOB_IMAGE_IDS = new Set([
   "warden",
   "zoglin",
 ]);
+const LOCAL_MOB_SOUND_LIBRARY_PATH = "public/assets/mob_sounds/index.json";
+const originalSoundUrlCache = new Map();
 
 const state = {
   config: null,
@@ -288,11 +292,24 @@ const state = {
   exportLogs: [],
   lastZipName: "",
   previewAudio: null,
-  previewMobId: null,
+  previewClipId: null,
+  hintAudio: null,
+  hintPlayingMobId: null,
+  hintLoadingMobId: null,
+  mobSoundLibrary: null,
   showAddMobPanel: false,
   addMobInput: "",
   recordNotice: ""
 };
+
+function createClipState() {
+  return {
+    recording: null,
+    accepted: false,
+    seconds: 0,
+    converting: false
+  };
+}
 
 const toTitleCase = (text) =>
   String(text)
@@ -318,13 +335,45 @@ const defaultImageForMob = (id) => {
 };
 
 function hydrateMobEntry(mob) {
-  return {
+  const hydrated = {
     ...mob,
-    recording: null,
-    accepted: false,
-    seconds: 0,
-    converting: false
+    clipStates: {}
   };
+  hydrated.clipStates[BASIC_CLIP_KEY] = createClipState();
+  return hydrated;
+}
+
+function getClipState(mob, clipKey = BASIC_CLIP_KEY) {
+  if (!mob.clipStates || typeof mob.clipStates !== "object") {
+    mob.clipStates = {};
+  }
+  if (!mob.clipStates[clipKey]) {
+    mob.clipStates[clipKey] = createClipState();
+  }
+  return mob.clipStates[clipKey];
+}
+
+function clipIdFor(mob, clipKey = BASIC_CLIP_KEY) {
+  return `${mob.id}::${clipKey}`;
+}
+
+function recordItems() {
+  return state.mobs.map((mob, mobIndex) => ({
+    mob,
+    mobIndex,
+    clipKey: BASIC_CLIP_KEY,
+    soundEventKey: null,
+    clipId: clipIdFor(mob, BASIC_CLIP_KEY)
+  }));
+}
+
+function setRecordIndexForMob(mobId) {
+  const idx = state.mobs.findIndex((mob) => mob.id === mobId);
+  state.recordIndex = idx >= 0 ? idx : 0;
+}
+
+function activeClipKeyForMob() {
+  return BASIC_CLIP_KEY;
 }
 
 function defaultSoundEventKeysForMob(id) {
@@ -347,6 +396,19 @@ function resolveSoundEventKeysForMob(mob) {
     return defaultSoundEventKeysForMob(cleanId);
   }
   return configured;
+}
+
+async function originalSoundUrlForMob(mob) {
+  const mobId = normalizeMobId(mob?.id);
+  if (!mobId) return "";
+  if (originalSoundUrlCache.has(mobId)) return originalSoundUrlCache.get(mobId);
+
+  const library = state.mobSoundLibrary?.mobs || {};
+  const entry = library[mobId];
+  const files = Array.isArray(entry?.files) ? entry.files : [];
+  const url = String(entry?.default || files[0] || "").trim();
+  originalSoundUrlCache.set(mobId, url);
+  return url;
 }
 
 function createMobDefinition(id, overrides = {}) {
@@ -437,8 +499,12 @@ const el = (html) => {
 };
 
 async function boot() {
-  const res = await fetch("public/mob_config.json");
-  state.config = await res.json();
+  const [configRes, soundLibraryRes] = await Promise.all([
+    fetch("public/mob_config.json"),
+    fetch(LOCAL_MOB_SOUND_LIBRARY_PATH).catch(() => null)
+  ]);
+  state.config = await configRes.json();
+  state.mobSoundLibrary = soundLibraryRes && soundLibraryRes.ok ? await soundLibraryRes.json() : null;
   state.mobs = resolveMobSet(DEFAULT_MOB_SET_ID);
   render();
 }
@@ -450,14 +516,14 @@ function resolveMobSet(setId) {
   return [...base, ...(set.mobs || [])].map((mob) => hydrateMobEntry(mob));
 }
 
-function currentMob() {
-  return state.mobs[state.recordIndex] || null;
-}
-
 function resetWorkflow() {
   stopPreviewAudio();
+  stopHintAudio();
   state.mobs.forEach((mob) => {
-    if (mob?.recording?.url) URL.revokeObjectURL(mob.recording.url);
+    const clipStates = mob?.clipStates ? Object.values(mob.clipStates) : [];
+    clipStates.forEach((clip) => {
+      if (clip?.recording?.url) URL.revokeObjectURL(clip.recording.url);
+    });
   });
   state.mobs = resolveMobSet(DEFAULT_MOB_SET_ID);
   state.step = 0;
@@ -466,6 +532,7 @@ function resetWorkflow() {
   state.exportLog = "";
   state.exportLogs = [];
   state.lastZipName = "";
+  state.hintLoadingMobId = null;
   state.showAddMobPanel = false;
   state.addMobInput = "";
   state.recordNotice = "";
@@ -597,20 +664,36 @@ function render() {
 }
 
 function renderRecord(root) {
-  const mob = currentMob();
-  if (!mob) {
+  const allItems = recordItems();
+  if (!allItems.length || !state.mobs.length) {
     root.insertAdjacentHTML("beforeend", `<section class="panel"><p>No mobs found.</p></section>`);
     return;
   }
+  if (state.recordIndex >= state.mobs.length) {
+    state.recordIndex = state.mobs.length - 1;
+  }
+  const mob = state.mobs[state.recordIndex];
+  if (!mob) return;
+  const clipKey = activeClipKeyForMob();
+  const clip = getClipState(mob, clipKey);
+  const item = {
+    mob,
+    clipKey,
+    soundEventKey: clipKey === BASIC_CLIP_KEY ? null : clipKey,
+    clipId: clipIdFor(mob, clipKey)
+  };
 
-  const done = state.mobs.filter((m) => m.accepted).length;
-  const pct = Math.round((done / state.mobs.length) * 100);
+  const done = allItems.filter((entry) => getClipState(entry.mob, entry.clipKey).accepted).length;
+  const pct = Math.round((done / allItems.length) * 100);
   const maxMs = maxRecordingMs(mob);
   const maxSec = Math.round(maxMs / 1000);
-  const remainingMs = state.isRecording ? state.recordingRemainingMs : maxMs;
-  const ringPct = Math.round((Math.max(0, remainingMs) / maxMs) * 100);
   const isLastMob = state.recordIndex === state.mobs.length - 1;
-  const isPreviewPlaying = state.previewMobId === mob.id && Boolean(state.previewAudio);
+  const clipSec = Math.max(0, clip.seconds || 0);
+  const clipTimeLabel = `${Math.floor(clipSec / 60)}:${String(Math.floor(clipSec % 60)).padStart(2, "0")}`;
+  const maxTimeLabel = `${Math.floor(maxSec / 60)}:${String(maxSec % 60).padStart(2, "0")}`;
+  const hintMobId = normalizeMobId(mob.id);
+  const hintPlaying = state.hintPlayingMobId === hintMobId && Boolean(state.hintAudio);
+  const hintLoading = state.hintLoadingMobId === hintMobId;
   const mobOptions = allMobOptions();
   const existingMobIds = new Set(state.mobs.map((m) => normalizeMobId(m.id)));
   const canAddMoreMobs = !hasAllKnownMobs();
@@ -620,19 +703,46 @@ function renderRecord(root) {
 
   root.insertAdjacentHTML(
     "beforeend",
-    `<section class="panel">
+    `<section class="panel panel-record">
+      <input id="raw-import-first" type="file" accept=".zip,application/zip" hidden />
       <div class="progress-wrap">
         <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-        <p class="note">${done}/${state.mobs.length} complete</p>
+        <p class="note">${done}/${allItems.length} complete</p>
       </div>
-      <figure class="mob-card single">
-        <img alt="${escapeHtml(mob.mob)}" src="${escapeHtml(mob.image)}" referrerpolicy="no-referrer" />
-        <figcaption>
-          <h3 class="nameplate">${escapeHtml(mob.mob)}</h3>
-        </figcaption>
-      </figure>
-      <div class="meter-row">
-        <span class="play-hint">▶ ${(mob.seconds || 0).toFixed(2)}</span>
+      <div class="record-stage">
+        <figure class="mob-card single">
+          <img alt="${escapeHtml(mob.mob)}" src="${escapeHtml(mob.image)}" referrerpolicy="no-referrer" />
+          <button
+            id="play-original-hint"
+            class="hint-corner-btn ${hintPlaying ? "playing" : ""}"
+            ${hintLoading ? "disabled" : ""}
+            title="play original sound"
+            aria-label="${hintPlaying ? "Stop original mob sound" : "Play original mob sound"}"
+          >▶</button>
+        </figure>
+        <div class="record-stage-main">
+          <div class="mob-card-copy">
+            <h3 class="nameplate">${escapeHtml(mob.mob)} <span class="nameplate-count">(${state.recordIndex + 1}/${state.mobs.length})</span></h3>
+          </div>
+          <div class="record-cta-wrap">
+            <button id="record" class="record-pill-btn ${state.isRecording ? "recording" : ""}" ${clip.converting ? "disabled" : ""}>
+              <span class="record-pill-icon" aria-hidden="true">🎙</span>
+              <span class="record-pill-label">${state.isRecording ? "Release to Stop" : "Hold to Record"}</span>
+            </button>
+            <div class="aux-buttons">
+              <button
+                id="preview-recording"
+                class="play-triangle-btn ${state.previewClipId === item.clipId && state.previewAudio ? "playing" : ""}"
+                ${!clip.recording?.url || state.isRecording || clip.converting ? "disabled" : ""}
+                aria-label="${state.previewClipId === item.clipId && state.previewAudio ? "Stop playback" : "Play recording"}"
+              ><span class="play-icon" aria-hidden="true"></span></button>
+              <button id="skip-circle" class="skip-circle-btn" ${state.isRecording || clip.converting ? "disabled" : ""}>Skip</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="meter-row meter-row-time">
+        <span class="play-hint">${clipTimeLabel} / ${maxTimeLabel}</span>
         <span class="note">Max ${maxSec}s</span>
       </div>
       <div class="level-meter segmented"><div class="level-meter-fill" style="width:${state.meterPct}%"></div></div>
@@ -648,38 +758,18 @@ function renderRecord(root) {
       </div>`
           : ""
       }
-      <div class="record-buttons">
-        <button
-          id="preview-recording"
-          class="play-triangle-btn ${isPreviewPlaying ? "playing" : ""}"
-          ${!mob.recording?.url || state.isRecording || mob.converting ? "disabled" : ""}
-          aria-label="${isPreviewPlaying ? "Stop playback" : "Play recording"}"
-        ><span class="play-icon" aria-hidden="true"></span></button>
-        <div class="hold-stack">
-          <div class="countdown-ring ${state.isRecording ? "active" : ""}" style="--ring-pct:${ringPct}">
-            <span>${(remainingMs / 1000).toFixed(1)}s</span>
-          </div>
-          <button id="record" class="circle-btn ${state.isRecording ? "recording" : ""}" ${mob.converting ? "disabled" : ""}>
-            <span>${state.isRecording ? "Release to Stop" : "Hold to Record"}</span>
-          </button>
-        </div>
-        <button id="skip-circle" class="skip-circle-btn" ${state.isRecording || mob.converting ? "disabled" : ""}>Skip</button>
-      </div>
-      ${mob.converting ? '<p class="note">Converting recording to OGG...</p>' : ""}
+      ${clip.converting ? '<p class="note">Converting recording to OGG...</p>' : ""}
       <div class="pager">
-        <button id="prev" class="chunky-btn" ${state.recordIndex === 0 || state.isRecording ? "disabled" : ""}>Back</button>
-        <button id="next" class="chunky-btn" ${(mob.recording || mob.accepted) && !state.isRecording && !mob.converting ? "" : "disabled"}>${isLastMob ? "Done" : "Next"}</button>
+        <button id="prev" class="chunky-btn" ${state.recordIndex === 0 || state.isRecording ? "disabled" : ""}>◀ Previous</button>
+        <button id="next" class="chunky-btn" ${(clip.recording || clip.accepted) && !state.isRecording && !clip.converting ? "" : "disabled"}>${isLastMob ? "Done" : "Next ▶"}</button>
       </div>
-      <div class="stack">
-        <button id="import-raw-first" class="ghost-btn" ${state.isRecording ? "disabled" : ""}>Import Raw Recordings</button>
-        <input id="raw-import-first" type="file" accept=".zip,application/zip" hidden />
-      </div>
+      <button id="import-raw-first-btn" class="ghost-btn" ${state.isRecording ? "disabled" : ""}>Import Raw Recordings</button>
       ${
         canAddMoreMobs || state.recordNotice
           ? `<div class="stack">
           ${
             canAddMoreMobs
-              ? `<button id="toggle-add-mob" class="text-link-btn" ${state.isRecording || mob.converting ? "disabled" : ""}>Missing a mob? Add it!</button>`
+              ? `<button id="toggle-add-mob" class="text-link-btn" ${state.isRecording || clip.converting ? "disabled" : ""}>Missing a mob? Add it!</button>`
               : ""
           }
           ${
@@ -715,7 +805,13 @@ function renderRecord(root) {
   const previewBtn = root.querySelector("#preview-recording");
   if (previewBtn) {
     previewBtn.onclick = () => {
-      toggleMobPreview(mob);
+      toggleClipPreview(mob, item.clipKey);
+    };
+  }
+  const hintBtn = root.querySelector("#play-original-hint");
+  if (hintBtn) {
+    hintBtn.onclick = async () => {
+      await toggleOriginalHintForMob(mob);
     };
   }
   const mobImg = root.querySelector(".mob-card.single img");
@@ -731,8 +827,8 @@ function renderRecord(root) {
     };
   }
 
-  wireHoldToRecord(root.querySelector("#record"), mob);
-  root.querySelector("#import-raw-first").onclick = () => {
+  wireHoldToRecord(root.querySelector("#record"), item);
+  root.querySelector("#import-raw-first-btn").onclick = () => {
     root.querySelector("#raw-import-first").click();
   };
   root.querySelector("#raw-import-first").onchange = async (ev) => {
@@ -771,12 +867,14 @@ function renderRecord(root) {
   }
   root.querySelector("#prev").onclick = () => {
     if (state.isRecording) return;
+    stopHintAudio();
     state.recordIndex = Math.max(0, state.recordIndex - 1);
     render();
   };
   root.querySelector("#next").onclick = () => {
     if (state.isRecording) return;
-    mob.accepted = true;
+    stopHintAudio();
+    clip.accepted = true;
     if (isLastMob) {
       state.step = 1;
     } else {
@@ -784,55 +882,80 @@ function renderRecord(root) {
     }
     render();
   };
-  root.querySelector("#skip-circle").onclick = () => {
-    if (state.isRecording || mob.converting) return;
-    mob.accepted = true;
-    if (isLastMob) {
-      state.step = 1;
-    } else {
-      state.recordIndex = Math.min(state.mobs.length - 1, state.recordIndex + 1);
-    }
-    render();
-  };
+  const basicSkipBtn = root.querySelector("#skip-circle");
+  if (basicSkipBtn) {
+    basicSkipBtn.onclick = () => {
+      if (state.isRecording || clip.converting) return;
+      stopHintAudio();
+      clip.accepted = true;
+      if (isLastMob) {
+        state.step = 1;
+      } else {
+        state.recordIndex = Math.min(state.mobs.length - 1, state.recordIndex + 1);
+      }
+      render();
+    };
+  }
 }
 
 function renderExport(root) {
-  const ready = state.mobs.filter((m) => m.accepted && m.recording?.blob);
-  const skipped = state.mobs.filter((m) => m.accepted && !m.recording?.blob).length;
-  const missing = state.mobs.filter((m) => !m.accepted).length;
-  const nonOggCount = ready.filter((m) => !String(m.recording?.blob?.type || "").includes("ogg")).length;
+  const items = recordItems();
+  const ready = items.filter((entry) => {
+    const clip = getClipState(entry.mob, entry.clipKey);
+    return clip.accepted && clip.recording?.blob;
+  });
+  const skipped = items.filter((entry) => {
+    const clip = getClipState(entry.mob, entry.clipKey);
+    return clip.accepted && !clip.recording?.blob;
+  }).length;
+  const missing = items.filter((entry) => !getClipState(entry.mob, entry.clipKey).accepted).length;
+  const nonOggCount = ready.filter((entry) => {
+    const clip = getClipState(entry.mob, entry.clipKey);
+    return !String(clip.recording?.blob?.type || "").includes("ogg");
+  }).length;
   const logText = state.exportLogs.join("\n") || state.exportLog;
   const showLogOpen = /failed|error/i.test(`${state.busyMsg} ${state.exportLog}`);
+  const isReady = missing === 0;
+  const headline = isReady ? "Your Voice Pack is Ready!" : "Your Voice Pack Needs Attention";
 
   root.insertAdjacentHTML(
     "beforeend",
-    `<section class="panel">
-      <div class="export-cta">
-        <h2>Export Pack</h2>
-        <p class="note">${missing ? "Record or skip the missing mobs to finish planning this pack." : "Everything is ready to export."}</p>
+    `<section class="panel panel-export">
+      <div class="export-hero">
+        <div class="ready-badge" aria-hidden="true">&#10003;</div>
+        <h2 class="export-headline">${headline}</h2>
+        <div class="export-pack-card">
+          <h3>Custom Mob Voice Pack</h3>
+          <p class="note">Compatible with Minecraft Java resource packs</p>
+          <div class="export-actions">
+            <button id="build" class="export-primary-btn" ${ready.length ? "" : "disabled"}>Download Resource Pack</button>
+            <button id="guide" class="export-secondary-btn">Installation Guide</button>
+          </div>
+          <div class="export-tertiary-actions">
+            <button id="raw" class="ghost-btn" ${ready.length ? "" : "disabled"}>Download Raw Recordings</button>
+            <button id="import" class="ghost-btn">Import Raw Recordings</button>
+            ${hasAllKnownMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Add a Mob</button>'}
+          </div>
+        </div>
         ${
           nonOggCount > 0
             ? `<p class="warn-note">${nonOggCount} clip(s) will be converted to OGG during export (first export may take longer).</p>`
             : ""
         }
-        <div class="export-actions">
-          <button id="build" class="big-btn danger-btn" ${ready.length ? "" : "disabled"}>Download Pack</button>
-          <button id="raw" class="ghost-btn" ${ready.length ? "" : "disabled"}>Download Raw Recordings</button>
-          <button id="import" class="ghost-btn">Import Raw Recordings</button>
-          ${hasAllKnownMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Missing a mob? Add it!</button>'}
-          <button id="restart" class="ghost-btn">Start Over</button>
+        <div class="export-bottom-row">
+          <button id="restart" class="ghost-btn">Back to Home</button>
+          <button id="start-over" class="ghost-btn">Start Over</button>
         </div>
         <p id="busy" class="note"></p>
       </div>
       <input id="raw-import" type="file" accept=".zip,application/zip" hidden />
-      <div class="mob-status-head">
-        <h2>Mob Status</h2>
-        <p class="note">${ready.length} ready${skipped ? ` • ${skipped} skipped` : ""}${missing ? ` • ${missing} missing` : ""}</p>
-      </div>
-      <div class="mob-grid" id="mob-list"></div>
       <details class="install-details">
         <summary>Install Instructions</summary>
         <div id="instructions" class="stack"></div>
+      </details>
+      <details class="log-details">
+        <summary>Mob Status (${ready.length} ready${skipped ? ` • ${skipped} skipped` : ""}${missing ? ` • ${missing} missing` : ""})</summary>
+        <div class="mob-grid" id="mob-list"></div>
       </details>
       <details class="log-details" ${showLogOpen ? "open" : ""}>
         <summary>Technical log (only needed if something breaks)</summary>
@@ -844,6 +967,13 @@ function renderExport(root) {
   root.querySelector("#build").onclick = async () => {
     await buildAndDownloadPack();
     render();
+  };
+  root.querySelector("#guide").onclick = () => {
+    const details = root.querySelector(".install-details");
+    if (details) {
+      details.open = true;
+      details.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   };
   root.querySelector("#raw").onclick = async () => {
     await downloadRawRecordings();
@@ -861,6 +991,10 @@ function renderExport(root) {
     };
   }
   root.querySelector("#restart").onclick = () => {
+    state.step = 0;
+    render();
+  };
+  root.querySelector("#start-over").onclick = () => {
     resetWorkflow();
     render();
   };
@@ -877,23 +1011,29 @@ function renderExport(root) {
   const list = root.querySelector("#mob-list");
   state.mobs.forEach((mob, idx) => {
     const item = el(`<article class="mob-tile"></article>`);
-    const canPlay = Boolean(mob.recording?.url);
-    const isPlaying = state.previewMobId === mob.id;
-    const status = mob.accepted ? (mob.recording?.blob ? "Ready" : "Skipped") : "Missing";
+    const clip = getClipState(mob, BASIC_CLIP_KEY);
+    const hasMissing = !clip.accepted;
+    const hasSkipped = clip.accepted && !clip.recording?.blob;
+    const playbackClipKey = BASIC_CLIP_KEY;
+    const playbackClip = getClipState(mob, playbackClipKey);
+    const canPlay = Boolean(playbackClip.recording?.url);
+    const isPlaying = state.previewClipId === clipIdFor(mob, playbackClipKey);
+    const status = hasMissing ? "Missing" : hasSkipped ? "Skipped" : "Ready";
+    const statusText = status;
     const statusClass =
       status === "Ready" ? "status-ready" : status === "Skipped" ? "status-skipped" : "status-missing";
     item.innerHTML = `<button class="mob-tile-main" type="button">
         <span class="mob-tile-name">${escapeHtml(mob.mob)}</span>
-        <span class="mob-tile-status ${statusClass}">${status}</span>
+        <span class="mob-tile-status ${statusClass}">${escapeHtml(statusText)}</span>
       </button>
       <button class="tiny-btn mob-play-btn" type="button" ${canPlay ? "" : "disabled"}>${isPlaying ? "Stop" : "Play"}</button>`;
     item.querySelector(".mob-tile-main").onclick = () => {
-      state.recordIndex = idx;
+      setRecordIndexForMob(state.mobs[idx].id);
       state.step = 0;
       render();
     };
     item.querySelector(".mob-play-btn").onclick = () => {
-      toggleMobPreview(mob);
+      toggleClipPreview(mob, playbackClipKey);
     };
     list.appendChild(item);
   });
@@ -901,7 +1041,7 @@ function renderExport(root) {
   const ins = root.querySelector("#instructions");
   const downloadedLine = state.lastZipName
     ? `<p><strong>Latest download:</strong> <code>${escapeHtml(state.lastZipName)}</code></p>`
-    : `<p>After you click <strong>Download Pack</strong>, move that zip file using the steps below.</p>`;
+    : `<p>After you click <strong>Download Resource Pack</strong>, move that zip file using the steps below.</p>`;
   ins.innerHTML = `<div class="install-card">
       <h3>Install in Minecraft</h3>
       ${downloadedLine}
@@ -964,40 +1104,91 @@ function stopPreviewAudio() {
     state.previewAudio.currentTime = 0;
   }
   state.previewAudio = null;
-  state.previewMobId = null;
+  state.previewClipId = null;
 }
 
-function toggleMobPreview(mob) {
-  if (!mob?.recording?.url) return;
-  if (state.previewMobId === mob.id && state.previewAudio) {
+function stopHintAudio() {
+  if (state.hintAudio) {
+    state.hintAudio.pause();
+    state.hintAudio.currentTime = 0;
+  }
+  state.hintAudio = null;
+  state.hintPlayingMobId = null;
+}
+
+async function toggleOriginalHintForMob(mob) {
+  const mobId = normalizeMobId(mob?.id);
+  if (!mobId) return;
+
+  if (state.hintPlayingMobId === mobId && state.hintAudio) {
+    stopHintAudio();
+    render();
+    return;
+  }
+
+  state.hintLoadingMobId = mobId;
+  state.recordNotice = "";
+  render();
+  try {
+    const url = await originalSoundUrlForMob(mob);
+    if (!url) {
+      state.recordNotice = `No original sound found for ${mob.mob}.`;
+      return;
+    }
+
+    stopHintAudio();
+    const audio = new Audio(url);
+    state.hintAudio = audio;
+    state.hintPlayingMobId = mobId;
+    audio.onended = () => {
+      stopHintAudio();
+      render();
+    };
+    await audio.play();
+  } catch (err) {
+    state.recordNotice = `Could not play original sound for ${mob.mob}.`;
+    logExport(`Hint playback failed for ${mobId}: ${String(err?.message || err)}`);
+  } finally {
+    state.hintLoadingMobId = null;
+    render();
+  }
+}
+
+function toggleClipPreview(mob, clipKey = BASIC_CLIP_KEY) {
+  const clip = getClipState(mob, clipKey);
+  if (!clip?.recording?.url) return;
+  const currentClipId = clipIdFor(mob, clipKey);
+  if (state.previewClipId === currentClipId && state.previewAudio) {
     stopPreviewAudio();
     render();
     return;
   }
 
   stopPreviewAudio();
-  const audio = new Audio(mob.recording.url);
+  const audio = new Audio(clip.recording.url);
   state.previewAudio = audio;
-  state.previewMobId = mob.id;
+  state.previewClipId = currentClipId;
   audio.onended = () => {
     state.previewAudio = null;
-    state.previewMobId = null;
+    state.previewClipId = null;
     render();
   };
   audio.play().catch((err) => {
-    logExport(`Preview playback failed for ${mob.id}: ${String(err?.message || err)}`);
+    logExport(`Preview playback failed for ${mob.id}/${clipKey}: ${String(err?.message || err)}`);
     stopPreviewAudio();
     render();
   });
   render();
 }
 
-async function startRecording(mob) {
+async function startRecording(item) {
   if (state.isRecording) return;
   if (!(await ensureMic())) {
     render();
     return;
   }
+  const { mob, clipKey } = item;
+  const clip = getClipState(mob, clipKey);
 
   state.chunks = [];
   state.isRecording = true;
@@ -1023,20 +1214,21 @@ async function startRecording(mob) {
     const blob = new Blob(state.chunks, { type: state.recorder.mimeType || "audio/webm" });
     clearMeter();
     clearRecordingCountdown();
-    if (state.previewMobId === mob.id) stopPreviewAudio();
-    if (mob.recording?.url) URL.revokeObjectURL(mob.recording.url);
-    mob.recording = {
+    if (state.previewClipId === clipIdFor(mob, clipKey)) stopPreviewAudio();
+    if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
+    clip.recording = {
       sourceFormat: blob.type,
       blob,
       url: URL.createObjectURL(blob)
     };
-    mob.accepted = false;
-    mob.seconds = blob.size ? (Date.now() - startAt) / 1000 : 0;
+    clip.accepted = false;
+    clip.seconds = blob.size ? (Date.now() - startAt) / 1000 : 0;
     state.isRecording = false;
     state.holdActive = false;
+    setRecordingUiActive(false);
     render();
     if (!blob.type.includes("ogg")) {
-      convertMobRecordingToOgg(mob).catch((err) => {
+      convertClipRecordingToOgg(mob, clipKey).catch((err) => {
         console.error(err);
       });
     }
@@ -1077,17 +1269,17 @@ function setRecordingUiActive(isActive) {
   const recordBtn = document.querySelector("#record");
   if (recordBtn) {
     recordBtn.classList.toggle("recording", isActive);
-    const label = recordBtn.querySelector("span");
+    const label = recordBtn.querySelector(".record-pill-label") || recordBtn.querySelector("span");
     if (label) label.textContent = isActive ? "Release to Stop" : "Hold to Record";
   }
   const ring = document.querySelector(".countdown-ring");
   if (ring) ring.classList.toggle("active", isActive);
 }
 
-function wireHoldToRecord(button, mob) {
+function wireHoldToRecord(button, item) {
   const startHold = async (ev) => {
     if (ev) ev.preventDefault();
-    if (mob.converting) return;
+    if (getClipState(item.mob, item.clipKey).converting) return;
     if (state.isRecording) return;
     clearHoldReleaseTimer();
     state.holdActive = true;
@@ -1096,16 +1288,13 @@ function wireHoldToRecord(button, mob) {
         button.setPointerCapture(ev.pointerId);
       }
     } catch {}
-    await startRecording(mob);
+    await startRecording(item);
   };
 
   const endHold = () => {
     state.holdActive = false;
     clearHoldReleaseTimer();
-    state.holdReleaseStopTimer = window.setTimeout(() => {
-      if (!state.holdActive) stopRecording();
-      state.holdReleaseStopTimer = null;
-    }, 300);
+    stopRecording();
   };
 
   button.onpointerdown = startHold;
@@ -1122,34 +1311,35 @@ function wireHoldToRecord(button, mob) {
   };
 }
 
-async function convertMobRecordingToOgg(mob) {
-  if (!mob?.recording?.blob) return;
-  if (String(mob.recording.blob.type || "").includes("ogg")) return;
-  if (mob.converting) return;
+async function convertClipRecordingToOgg(mob, clipKey = BASIC_CLIP_KEY) {
+  const clip = getClipState(mob, clipKey);
+  if (!clip?.recording?.blob) return;
+  if (String(clip.recording.blob.type || "").includes("ogg")) return;
+  if (clip.converting) return;
 
-  mob.converting = true;
+  clip.converting = true;
   state.busyMsg = "Converting recording to OGG...";
-  logExport(`Converting ${mob.id} immediately after recording...`);
+  logExport(`Converting ${mob.id}/${clipKey} immediately after recording...`);
   render();
 
   try {
-    const ogg = await toOgg(mob.recording.blob, mob.id);
-    if (state.previewMobId === mob.id) stopPreviewAudio();
-    if (mob.recording?.url) URL.revokeObjectURL(mob.recording.url);
-    mob.recording = {
+    const ogg = await toOgg(clip.recording.blob, `${mob.id}_${clipKey}`);
+    if (state.previewClipId === clipIdFor(mob, clipKey)) stopPreviewAudio();
+    if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
+    clip.recording = {
       sourceFormat: "audio/ogg",
       blob: ogg,
       url: URL.createObjectURL(ogg)
     };
     state.busyMsg = "";
-    logExport(`Conversion complete for ${mob.id}.`);
+    logExport(`Conversion complete for ${mob.id}/${clipKey}.`);
   } catch (err) {
     const msg = String(err?.message || err);
     state.busyMsg = "Could not convert this recording to OGG. Check log and retry.";
-    logExport(`Immediate conversion failed for ${mob.id}: ${msg}`);
+    logExport(`Immediate conversion failed for ${mob.id}/${clipKey}: ${msg}`);
     throw err;
   } finally {
-    mob.converting = false;
+    clip.converting = false;
     render();
   }
 }
@@ -1389,7 +1579,9 @@ function sanitizePackName(s) {
 }
 
 async function buildAndDownloadPack() {
-  const recorded = state.mobs.filter((m) => m.accepted && m.recording?.blob);
+  const recorded = recordItems()
+    .map((item) => ({ ...item, clip: getClipState(item.mob, item.clipKey) }))
+    .filter((entry) => entry.clip.accepted && entry.clip.recording?.blob);
   if (!recorded.length) {
     state.busyMsg = "No accepted recordings to export.";
     return;
@@ -1422,13 +1614,15 @@ async function buildAndDownloadPack() {
     const soundsJson = {};
 
     for (let i = 0; i < recorded.length; i += 1) {
-      const mob = recorded[i];
-      state.busyMsg = `Converting ${i + 1}/${recorded.length}: ${mob.id}`;
-      logExport(`Processing mob ${i + 1}/${recorded.length}: ${mob.id}`);
+      const entry = recorded[i];
+      const { mob, clip } = entry;
+      const label = mob.id;
+      state.busyMsg = `Converting ${i + 1}/${recorded.length}: ${label}`;
+      logExport(`Processing clip ${i + 1}/${recorded.length}: ${label}`);
       render();
 
       const targetSoundPath = `mobvoices/${mob.id}/voice`;
-      const ogg = await toOgg(mob.recording.blob, mob.id);
+      const ogg = await toOgg(clip.recording.blob, label);
       zip.file(`assets/minecraft/sounds/${targetSoundPath}.ogg`, ogg);
       logExport(`Wrote ${targetSoundPath}.ogg`);
 
@@ -1470,7 +1664,9 @@ async function buildAndDownloadPack() {
 }
 
 async function downloadRawRecordings() {
-  const recorded = state.mobs.filter((m) => m.accepted && m.recording?.blob);
+  const recorded = recordItems()
+    .map((item) => ({ ...item, clip: getClipState(item.mob, item.clipKey) }))
+    .filter((entry) => entry.clip.accepted && entry.clip.recording?.blob);
   if (!recorded.length) return;
 
   try {
@@ -1484,19 +1680,22 @@ async function downloadRawRecordings() {
       clips: []
     };
     for (let i = 0; i < recorded.length; i += 1) {
-      const mob = recorded[i];
-      state.busyMsg = `Preparing ${i + 1}/${recorded.length}: ${mob.id}`;
+      const entry = recorded[i];
+      const { mob, clip } = entry;
+      const label = mob.id;
+      state.busyMsg = `Preparing ${i + 1}/${recorded.length}: ${label}`;
       render();
 
-      const ogg = await toOgg(mob.recording.blob, mob.id);
+      const ogg = await toOgg(clip.recording.blob, label);
       const file = `raw/${mob.id}.ogg`;
       zip.file(file, ogg);
-      manifest.clips.push({
+      const manifestClip = {
         mob: mob.id,
         mimeType: "audio/ogg",
         file,
         soundEventKeys: resolveSoundEventKeysForMob(mob)
-      });
+      };
+      manifest.clips.push(manifestClip);
     }
     zip.file("raw/manifest.json", JSON.stringify(manifest, null, 2));
     const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
@@ -1615,15 +1814,16 @@ async function importRawRecordingsZip(file, options = {}) {
       const blob = await c.zipEntry.async("blob");
       const typedBlob = blob.type ? blob : new Blob([blob], { type: c.mimeType || "application/octet-stream" });
       const seconds = await blobDurationSeconds(typedBlob);
-      if (mob.recording?.url) URL.revokeObjectURL(mob.recording.url);
-      mob.recording = {
+      const clip = getClipState(mob, BASIC_CLIP_KEY);
+      if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
+      clip.recording = {
         sourceFormat: typedBlob.type || c.mimeType || "application/octet-stream",
         blob: typedBlob,
         url: URL.createObjectURL(typedBlob)
       };
-      mob.seconds = seconds;
-      mob.accepted = true;
-      mob.converting = false;
+      clip.seconds = seconds;
+      clip.accepted = true;
+      clip.converting = false;
       imported += 1;
     }
 
