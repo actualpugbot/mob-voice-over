@@ -4,13 +4,21 @@ const APP_TITLE = "Mob Impression Challenge";
 const RESOURCE_PACK_NAME = "Mob Voice Over";
 const PACK_DESCRIPTION = "Mob impressions recorded with Mob Impression Challenge";
 const DEFAULT_PACK_FORMAT = 75;
-const STARTING_SCORE = 1000;
-const ACCEPT_POINTS = 120;
-const RETRY_PENALTY = 25;
-const SKIP_PENALTY = 100;
+const STARTING_SCORE = 0;
+const CHALLENGE_PROGRESS_TARGET = 15;
+const ACCEPT_POINTS = 200;
+const BLIND_BONUS_POINTS = 150;
+const ORIGINAL_REPLAY_PENALTY = 25;
+const ORIGINAL_REPLAY_PENALTY_CAP = 75;
+const RETRY_PENALTY = 50;
+const SKIP_PENALTY = 150;
+const MIN_VALID_RECORDING_SECONDS = 0.2;
+const MIN_VALID_RECORDING_PEAK = 0.02;
 const DEFAULT_MOB_IMAGE = "public/assets/mobs/unknown_mob.png";
 const DEFAULT_MOB_SET_ID = "basic";
 const BASIC_CLIP_KEY = "__mob_default__";
+const THEME_STORAGE_KEY = "mob_voice_over_theme";
+const DEFAULT_THEME = "light";
 const EXTRA_MOB_IMAGE_EXTENSIONS = Object.freeze({
   camel_husk: "gif",
   copper_golem: "png",
@@ -272,6 +280,7 @@ const MIN_ANALYSIS_RMS = 1e-5;
 const ENVELOPE_BINS = 72;
 
 const state = {
+  theme: DEFAULT_THEME,
   config: null,
   step: 0,
   mobs: [],
@@ -282,15 +291,14 @@ const state = {
   chunks: [],
   isRecording: false,
   meterPct: 0,
+  recordingPeak: 0,
   meterTimer: null,
   analyser: null,
   audioCtx: null,
   recordCountdownTimer: null,
   recordStopTimer: null,
-  holdReleaseStopTimer: null,
   recordingMaxMs: 0,
   recordingRemainingMs: 0,
-  holdActive: false,
   micPrimed: false,
   ffmpeg: null,
   ffmpegUtil: null,
@@ -310,6 +318,15 @@ const state = {
   addMobInput: "",
   recordNotice: "",
   score: STARTING_SCORE,
+  displayedScore: STARTING_SCORE,
+  scoreAnimationFrame: null,
+  scorePulseType: "",
+  scorePulseTimer: null,
+  scoreFxItems: [],
+  bonusFxItems: [],
+  scoreFxCounter: 0,
+  completedCount: 0,
+  riskChipFadingClipId: "",
   hasStartedRecording: false,
   revealPhase: 0,
   revealTimers: [],
@@ -320,6 +337,7 @@ const state = {
     lastSignature: "",
     overallPct: null,
     comparedCount: 0,
+    processedCount: 0,
     totalCount: 0,
     results: [],
     error: ""
@@ -328,15 +346,157 @@ const state = {
   mobImageLoopToken: 0
 };
 
+function normalizeTheme(value) {
+  return String(value || "").trim().toLowerCase() === "dark" ? "dark" : "light";
+}
+
+function loadThemePreference() {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    return normalizeTheme(stored || DEFAULT_THEME);
+  } catch {
+    return DEFAULT_THEME;
+  }
+}
+
+function applyTheme(theme) {
+  const nextTheme = normalizeTheme(theme);
+  state.theme = nextTheme;
+  document.documentElement.setAttribute("data-theme", nextTheme);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+  } catch {}
+}
+
 function createClipState() {
   return {
     recording: null,
     accepted: false,
+    skipped: false,
     seconds: 0,
     converting: false,
     takes: 0,
-    pointsAwarded: false
+    retryCount: 0,
+    listenCount: 0,
+    hasListened: false,
+    blindEligible: true,
+    blindBonusAwarded: false,
+    riskChipDismissed: false,
+    blindToastShown: false,
+    pointsAwarded: false,
+    originalHintPlayCount: 0
   };
+}
+
+function idleRecordButtonLabel(clip) {
+  return clip?.recording?.blob ? `Retry (-${RETRY_PENALTY})` : "Record Your Voice!";
+}
+
+function cancelScoreAnimation() {
+  if (!state.scoreAnimationFrame) return;
+  cancelAnimationFrame(state.scoreAnimationFrame);
+  state.scoreAnimationFrame = null;
+}
+
+function animateScoreTo(targetScore) {
+  cancelScoreAnimation();
+  const startScore = Number(state.displayedScore || 0);
+  const endScore = Number(targetScore || 0);
+  if (Math.round(startScore) === Math.round(endScore)) {
+    state.displayedScore = endScore;
+    render();
+    return;
+  }
+
+  const delta = Math.abs(endScore - startScore);
+  const durationMs = Math.min(900, Math.max(240, delta * 14));
+  const startedAt = performance.now();
+
+  const tick = (now) => {
+    const t = Math.min(1, (now - startedAt) / durationMs);
+    const eased = 1 - (1 - t) ** 3;
+    state.displayedScore = startScore + (endScore - startScore) * eased;
+    render();
+    if (t < 1) {
+      state.scoreAnimationFrame = requestAnimationFrame(tick);
+      return;
+    }
+    state.displayedScore = endScore;
+    state.scoreAnimationFrame = null;
+    render();
+  };
+
+  state.scoreAnimationFrame = requestAnimationFrame(tick);
+}
+
+function applyScoreDelta(delta) {
+  const value = Number(delta || 0);
+  if (!Number.isFinite(value) || value === 0) return;
+  const prev = Number(state.score || 0);
+  const next = Math.max(0, prev + value);
+  const applied = next - prev;
+  if (applied === 0) return;
+  state.score = next;
+  animateScoreTo(next);
+  triggerScoreFeedback(applied);
+}
+
+function triggerScoreFeedback(delta) {
+  const type = delta > 0 ? "positive" : "negative";
+  state.scorePulseType = type;
+  if (state.scorePulseTimer) {
+    clearTimeout(state.scorePulseTimer);
+  }
+  state.scorePulseTimer = window.setTimeout(() => {
+    state.scorePulseType = "";
+    state.scorePulseTimer = null;
+    render();
+  }, 450);
+
+  const id = `${Date.now()}-${state.scoreFxCounter++}`;
+  const text = `${delta > 0 ? "+" : "-"}${Math.abs(Math.round(delta))}`;
+  state.scoreFxItems = [...state.scoreFxItems, { id, text, type }];
+  window.setTimeout(() => {
+    state.scoreFxItems = state.scoreFxItems.filter((item) => item.id !== id);
+    render();
+  }, 950);
+}
+
+function triggerBlindBonusToast() {
+  const id = `${Date.now()}-blind-${state.scoreFxCounter++}`;
+  state.bonusFxItems = [...state.bonusFxItems, { id, text: `+${BLIND_BONUS_POINTS} Blind Bonus!`, type: "bonus" }];
+  window.setTimeout(() => {
+    state.bonusFxItems = state.bonusFxItems.filter((item) => item.id !== id);
+    render();
+  }, 1200);
+}
+
+function updateCompletedCount() {
+  state.completedCount = recordItems().filter((entry) => getClipState(entry.mob, entry.clipKey).accepted).length;
+}
+
+function totalTakeCount() {
+  return recordItems().reduce((sum, entry) => sum + Math.max(0, Number(getClipState(entry.mob, entry.clipKey).takes || 0)), 0);
+}
+
+function challengeSummaryStats() {
+  return recordItems().reduce(
+    (acc, entry) => {
+      const clip = getClipState(entry.mob, entry.clipKey);
+      acc.blindTakes += clip.blindBonusAwarded ? 1 : 0;
+      acc.totalRetries += Math.max(0, Number(clip.retryCount || 0));
+      acc.totalListens += Math.max(0, Number(clip.listenCount || 0));
+      acc.skippedMobs += clip.skipped ? 1 : 0;
+      return acc;
+    },
+    { blindTakes: 0, totalRetries: 0, totalListens: 0, skippedMobs: 0 }
+  );
+}
+
+function scoreTitle(score) {
+  if (score < 1500) return "Villager Noises";
+  if (score <= 3000) return "Mob Whisperer";
+  return "Chaos Overlord";
 }
 
 const toTitleCase = (text) =>
@@ -589,6 +749,8 @@ async function runClosenessAnalysis(signature) {
     ...state.closenessAnalysis,
     status: "loading",
     lastSignature: signature,
+    processedCount: 0,
+    totalCount: recordItems().length,
     error: ""
   };
   render();
@@ -634,6 +796,15 @@ async function runClosenessAnalysis(signature) {
         }
       }
       results.push(row);
+      if (runId !== state.closenessRunId) return;
+      state.closenessAnalysis = {
+        ...state.closenessAnalysis,
+        status: "loading",
+        processedCount: i + 1,
+        totalCount: items.length,
+        results: [...results]
+      };
+      render();
     }
 
     if (runId !== state.closenessRunId) return;
@@ -642,6 +813,7 @@ async function runClosenessAnalysis(signature) {
       lastSignature: signature,
       overallPct: comparedCount ? Math.round(totalPct / comparedCount) : null,
       comparedCount,
+      processedCount: results.length,
       totalCount: results.length,
       results,
       error: ""
@@ -786,6 +958,7 @@ const el = (html) => {
 };
 
 async function boot() {
+  applyTheme(loadThemePreference());
   const [configRes, soundLibraryRes] = await Promise.all([
     fetch("public/mob_config.json"),
     fetch(LOCAL_MOB_SOUND_LIBRARY_PATH).catch(() => null)
@@ -793,6 +966,7 @@ async function boot() {
   state.config = await configRes.json();
   state.mobSoundLibrary = soundLibraryRes && soundLibraryRes.ok ? await soundLibraryRes.json() : null;
   state.mobs = resolveMobSet(DEFAULT_MOB_SET_ID);
+  updateCompletedCount();
   render();
 }
 
@@ -858,7 +1032,19 @@ function resetWorkflow() {
   state.showAddMobPanel = false;
   state.addMobInput = "";
   state.recordNotice = "";
+  cancelScoreAnimation();
+  if (state.scorePulseTimer) {
+    clearTimeout(state.scorePulseTimer);
+    state.scorePulseTimer = null;
+  }
   state.score = STARTING_SCORE;
+  state.displayedScore = STARTING_SCORE;
+  state.scorePulseType = "";
+  state.scoreFxItems = [];
+  state.bonusFxItems = [];
+  state.scoreFxCounter = 0;
+  state.completedCount = 0;
+  state.riskChipFadingClipId = "";
   state.hasStartedRecording = false;
   state.revealPhase = 0;
   state.closenessRunId += 1;
@@ -867,10 +1053,12 @@ function resetWorkflow() {
     lastSignature: "",
     overallPct: null,
     comparedCount: 0,
+    processedCount: 0,
     totalCount: 0,
-    results: [],
-    error: ""
+      results: [],
+      error: ""
   };
+  updateCompletedCount();
 }
 
 function baseMobCount() {
@@ -950,6 +1138,10 @@ function maxRecordingMs(mob) {
   return 5000;
 }
 
+function formatSeconds(seconds) {
+  return `${Number(seconds || 0).toFixed(1)}s`;
+}
+
 function activeVersionPreset() {
   return state.config?.versionPresets?.[0] || null;
 }
@@ -981,8 +1173,22 @@ function packMetaForExport() {
 
 function render() {
   stopMobImageLoop();
+  updateCompletedCount();
   app.innerHTML = "";
   const page = el(`<section class="sheet"></section>`);
+  const progressNow = Math.min(state.completedCount, CHALLENGE_PROGRESS_TARGET);
+  const takesNow = totalTakeCount();
+  const scorePulseClass = state.scorePulseType ? `score-value-${state.scorePulseType}` : "";
+  const floatingFx = state.scoreFxItems
+    .map(
+      (item) => `<span class="score-fx score-fx-${item.type}" data-fx-id="${escapeHtml(item.id)}">${escapeHtml(item.text)}</span>`
+    )
+    .concat(
+      state.bonusFxItems.map(
+        (item) => `<span class="score-fx score-fx-${item.type}" data-fx-id="${escapeHtml(item.id)}">${escapeHtml(item.text)}</span>`
+      )
+    )
+    .join("");
 
   page.insertAdjacentHTML(
     "beforeend",
@@ -991,8 +1197,34 @@ function render() {
         <h1>${APP_TITLE}</h1>
         <p class="subtitle">Can you sound like a game mob?</p>
       </div>
-    </header>`
+      <div class="scoreboard-strip">
+        <p>Progress: <strong>${progressNow} / ${CHALLENGE_PROGRESS_TARGET}</strong></p>
+        <p class="score-value ${scorePulseClass}">Score: <strong>${Math.round(state.displayedScore)}</strong></p>
+        <p>Takes: <strong>${takesNow}</strong></p>
+        <div class="score-fx-layer" aria-hidden="true">${floatingFx}</div>
+      </div>
+    </header>
+    <button
+      id="theme-toggle"
+      class="theme-toggle-btn"
+      type="button"
+      aria-pressed="${state.theme === "dark" ? "true" : "false"}"
+      aria-label="${state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}"
+      title="${state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}"
+    >
+      <span class="theme-toggle-icon" aria-hidden="true">
+        <span class="sun-disc"></span>
+        <span class="moon-disc"></span>
+      </span>
+    </button>`
   );
+  const themeToggleBtn = page.querySelector("#theme-toggle");
+  if (themeToggleBtn) {
+    themeToggleBtn.onclick = () => {
+      applyTheme(state.theme === "dark" ? "light" : "dark");
+      render();
+    };
+  }
 
   if (state.step === 0) renderRecord(page);
   if (state.step === 1) {
@@ -1023,44 +1255,33 @@ function renderRecord(root) {
     clipId: clipIdFor(mob, clipKey)
   };
 
-  const done = allItems.filter((entry) => getClipState(entry.mob, entry.clipKey).accepted).length;
-  const maxMs = maxRecordingMs(mob);
-  const maxSec = Math.round(maxMs / 1000);
+  const done = state.completedCount;
   const isLastMob = state.recordIndex === state.mobs.length - 1;
-  const clipSec = Math.max(0, clip.seconds || 0);
   const hintMobId = normalizeMobId(mob.id);
   const hintPlaying = state.hintPlayingMobId === hintMobId && Boolean(state.hintAudio);
   const hintLoading = state.hintLoadingMobId === hintMobId;
   const canAccept = Boolean(clip.recording?.url) && !clip.accepted && !state.isRecording && !clip.converting;
-  const canRetry = (Boolean(clip.recording?.url) || clip.accepted) && !state.isRecording && !clip.converting;
-  const takes = Math.max(0, clip.takes || 0);
+  const listenedCount = Number(clip.listenCount || 0);
+  const heardOriginal = listenedCount > 0;
+  const listenPenaltyApplied = Math.min(Math.max(0, listenedCount - 1), ORIGINAL_REPLAY_PENALTY_CAP / ORIGINAL_REPLAY_PENALTY);
+  const hasRecordedYet = Number(clip.takes || 0) > 0 || Boolean(clip.recording?.blob);
+  const blindBonusAvailable = !clip.hasListened && !hasRecordedYet && !clip.riskChipDismissed;
+  const blindChipFading = state.riskChipFadingClipId === item.clipId;
+  const canPreviewRecording = Boolean(clip.recording?.url) && !state.isRecording && !clip.converting;
+  const isPreviewingRecording = state.previewClipId === item.clipId && Boolean(state.previewAudio);
   const canGoNext = (clip.accepted || canAccept) && !state.isRecording && !clip.converting;
-  const nextLabel = clip.accepted ? (isLastMob ? "Finish" : "Next") : "Submit";
-  const scoreAfterAccept = state.score + ACCEPT_POINTS;
-  const acceptHint = canAccept
-    ? `Accepting this take sets score to ${scoreAfterAccept}.`
-    : "First take glory is real.";
-  const scorePct =
-    clip.recording?.blob && maxSec > 0 ? Math.min(100, Math.round((Math.max(0, clipSec) / maxSec) * 100)) : null;
-  const scoreLabel = scorePct == null ? "-- %" : `${scorePct} %`;
-  const scoreBarWidth = scorePct == null ? 0 : scorePct;
-  const leaderboardRows = [
-    { name: "Player123", points: 1450 },
-    { name: "MineMaster", points: 1320 },
-    { name: "BlockHero", points: 1250 },
-    { name: "CraftQueen", points: 1180 },
-    { name: "SteveFan", points: 1100 }
-  ];
-  const mobQueueRows = allItems.map((entry, idx) => {
-    const itemClip = getClipState(entry.mob, entry.clipKey);
-    const status = itemClip.accepted ? "Done" : "To Record";
-    return {
-      idx,
-      name: entry.mob.mob,
-      status,
-      isCurrent: idx === state.recordIndex
-    };
-  });
+  const canSkip = !state.isRecording && !clip.converting && !clip.accepted;
+  const nextLabel = clip.accepted ? (isLastMob ? "Finish" : "Next") : `Accept (+${ACCEPT_POINTS})`;
+  const hintBtnLabel = hintPlaying
+    ? "Stop Original Sound"
+    : heardOriginal
+      ? listenPenaltyApplied >= ORIGINAL_REPLAY_PENALTY_CAP / ORIGINAL_REPLAY_PENALTY
+        ? "Hear Original (Max -75)"
+        : `Hear Original (-${ORIGINAL_REPLAY_PENALTY})`
+      : "Hear Original (Free)";
+  const recordingMaxMs = state.recordingMaxMs || maxRecordingMs(mob);
+  const recordingRemainingMs = state.isRecording ? state.recordingRemainingMs : recordingMaxMs;
+  const recordingProgressPct = Math.round((Math.max(0, recordingRemainingMs) / Math.max(1, recordingMaxMs)) * 100);
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-record panel-record-mock">
@@ -1080,74 +1301,55 @@ function renderRecord(root) {
               id="play-original-hint"
               class="mock-btn mock-btn-green ${hintPlaying ? "playing" : ""}"
               ${hintLoading ? "disabled" : ""}
-            >${hintPlaying ? "Stop Original Sound" : "Hear Original Sound"}</button>
-            <button id="record" class="mock-btn mock-btn-blue ${state.isRecording ? "recording" : ""}" ${
-              clip.converting || clip.accepted ? "disabled" : ""
-            }>
-              <span class="record-pill-label">${state.isRecording ? "Release to Stop" : "Record Your Voice!"}</span>
-            </button>
-          </div>
-          <div class="challenge-score-row">
-            <p>Your Recording Score: <strong>${scoreLabel}</strong></p>
-            <div class="countdown-ring" style="--ring-pct: ${scoreBarWidth}">
-              <span>${state.isRecording ? `${(state.recordingRemainingMs / 1000).toFixed(1)}s` : `${maxSec.toFixed(1)}s`}</span>
+            >${hintBtnLabel}</button>
+            <div class="record-chip-wrap">
+              <button id="record" class="mock-btn mock-btn-blue ${state.isRecording ? "recording" : ""}" ${
+                clip.converting || clip.accepted ? "disabled" : ""
+              }>
+                <span class="record-pill-label">${state.isRecording ? "Stop Recording" : idleRecordButtonLabel(clip)}</span>
+              </button>
+              ${
+                blindBonusAvailable
+                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}">🎯 Risk It: +${BLIND_BONUS_POINTS}</span>`
+                  : ""
+              }
             </div>
-            <button id="next" class="submit-btn" ${canGoNext ? "" : "disabled"}>${nextLabel}</button>
           </div>
-          <div class="challenge-mini-controls">
-            <button
-              id="preview-recording"
-              class="ghost-btn"
-              ${!clip.recording?.url || state.isRecording || clip.converting ? "disabled" : ""}
-            >${state.previewClipId === item.clipId && state.previewAudio ? "Stop Playback" : "Play Recording"}</button>
-            <button id="retry-take" class="ghost-btn" ${canRetry ? "" : "disabled"}>Retry (-${RETRY_PENALTY})</button>
-            <button id="skip-circle" class="ghost-btn" ${
-              state.isRecording || clip.converting || clip.accepted ? "disabled" : ""
-            }>Skip (-${SKIP_PENALTY})</button>
+          <div class="recording-indicator ${state.isRecording ? "active" : ""}" aria-live="polite">
+            <div class="recording-indicator-main">
+              <button
+                id="play-my-recording"
+                class="indicator-play-btn ${isPreviewingRecording ? "is-playing" : ""}"
+                type="button"
+                ${canPreviewRecording ? "" : "disabled"}
+                aria-label="${isPreviewingRecording ? "Stop playback" : "Play your recording"}"
+                title="${isPreviewingRecording ? "Stop playback" : "Play your recording"}"
+              >
+                <span class="indicator-play-glyph" aria-hidden="true"></span>
+              </button>
+              <div class="recording-indicator-content">
+                <div class="recording-indicator-row">
+                  <span class="recording-status-dot" aria-hidden="true"></span>
+                  <p class="recording-status-text">${state.isRecording ? "Recording now" : "Ready to record"}</p>
+                  <p class="recording-time-label">
+                    ${state.isRecording ? "Time left" : "Max"}:
+                    <strong class="recording-time-value">${formatSeconds(recordingRemainingMs / 1000)}</strong>
+                  </p>
+                </div>
+                <div class="countdown-ring ${state.isRecording ? "active" : ""}" style="--ring-pct:${recordingProgressPct};">
+                  <span>${formatSeconds(recordingRemainingMs / 1000)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="challenge-primary-controls">
             <button id="prev" class="ghost-btn" ${state.recordIndex === 0 || state.isRecording ? "disabled" : ""}>Previous</button>
+            <button id="next" class="submit-btn" ${canGoNext ? "" : "disabled"}>${nextLabel}</button>
+            <button id="skip-circle" class="ghost-btn" ${canSkip ? "" : "disabled"}>Skip (-${SKIP_PENALTY})</button>
           </div>
-          <p class="note">Round ${state.recordIndex + 1} of ${state.mobs.length}. Attempts: ${takes}. ${acceptHint}</p>
+          <p class="note challenge-progress-note">Progress: <strong>${done}/${allItems.length}</strong> completed | Mob Takes: <strong>${Math.max(0, Number(clip.takes || 0))}</strong></p>
         </section>
-        ${
-          state.hasStartedRecording
-            ? `<aside class="leaderboard-card mob-queue-card">
-          <h2>Mobs to Record</h2>
-          <ol class="mob-queue-list">
-            ${mobQueueRows
-              .map(
-                (row) => `<li class="${row.isCurrent ? "is-current" : ""}">
-              <span>${row.idx + 1}. ${escapeHtml(row.name)}</span>
-              <strong>${row.status}</strong>
-            </li>`
-              )
-              .join("")}
-          </ol>
-          <p class="note">Progress: <strong>${done}/${allItems.length}</strong> completed</p>
-        </aside>`
-            : `<aside class="leaderboard-card">
-          <h2>Leaderboard</h2>
-          <ol>
-            ${leaderboardRows
-              .map(
-                (row, idx) =>
-                  `<li><span>${idx + 1}. ${escapeHtml(row.name)}</span><strong>${row.points} pts</strong></li>`
-              )
-              .join("")}
-          </ol>
-          <button class="leaderboard-btn" type="button">View Full Rankings &gt;</button>
-          <p class="note">Your score: <strong>${state.score}</strong> | Mobs conquered: ${done}/${allItems.length}</p>
-        </aside>`
-        }
       </div>
-      ${
-        state.hasStartedRecording
-          ? ""
-          : `<div class="steps-row">
-        <p><span>1</span> Listen to mob sound...</p>
-        <p><span>2</span> Record your best impression...</p>
-        <p><span>3</span> Climb the leaderboard!</p>
-      </div>`
-      }
       ${
         state.micStatus !== "ready"
           ? `<div class="stack">
@@ -1167,16 +1369,27 @@ function renderRecord(root) {
     </section>`
   );
 
-  const previewBtn = root.querySelector("#preview-recording");
-  if (previewBtn) {
-    previewBtn.onclick = () => {
-      toggleClipPreview(mob, item.clipKey);
-    };
-  }
   const hintBtn = root.querySelector("#play-original-hint");
   if (hintBtn) {
     hintBtn.onclick = async () => {
+      if (!clip.riskChipDismissed) {
+        clip.riskChipDismissed = true;
+        state.riskChipFadingClipId = item.clipId;
+        render();
+        window.setTimeout(() => {
+          if (state.riskChipFadingClipId === item.clipId) {
+            state.riskChipFadingClipId = "";
+            render();
+          }
+        }, 200);
+      }
       await toggleOriginalHintForMob(mob);
+    };
+  }
+  const playbackBtn = root.querySelector("#play-my-recording");
+  if (playbackBtn) {
+    playbackBtn.onclick = () => {
+      toggleClipPreview(mob, clipKey);
     };
   }
   const mobImg = root.querySelector(".mob-card.single img");
@@ -1196,7 +1409,7 @@ function renderRecord(root) {
     };
   }
 
-  wireHoldToRecord(root.querySelector("#record"), item);
+  wireRecordToggle(root.querySelector("#record"), item);
   root.querySelector("#prev").onclick = () => {
     if (state.isRecording) return;
     stopHintAudio();
@@ -1209,36 +1422,36 @@ function renderRecord(root) {
     if (!clip.accepted) {
       if (!canAccept) return;
       clip.accepted = true;
+      clip.skipped = false;
       if (!clip.pointsAwarded) {
-        state.score += ACCEPT_POINTS;
+        let delta = ACCEPT_POINTS;
+        if (clip.blindEligible && !clip.blindBonusAwarded) {
+          delta += BLIND_BONUS_POINTS;
+          clip.blindBonusAwarded = true;
+        }
+        applyScoreDelta(delta);
         clip.pointsAwarded = true;
       }
+      updateCompletedCount();
     }
     advanceToNextMob();
     render();
   };
-  const retryBtn = root.querySelector("#retry-take");
-  if (retryBtn) {
-    retryBtn.onclick = () => {
-      if (!canRetry) return;
-      state.score -= RETRY_PENALTY;
-      clip.accepted = false;
-      if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
-      clip.recording = null;
-      clip.seconds = 0;
-      render();
-    };
-  }
   const basicSkipBtn = root.querySelector("#skip-circle");
   if (basicSkipBtn) {
     basicSkipBtn.onclick = () => {
       if (state.isRecording || clip.converting) return;
+      if (!window.confirm(`Skip this mob? (-${SKIP_PENALTY})`)) return;
       stopHintAudio();
-      state.score -= SKIP_PENALTY;
+      applyScoreDelta(-SKIP_PENALTY);
       if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
       clip.recording = null;
       clip.seconds = 0;
       clip.accepted = true;
+      clip.skipped = true;
+      clip.blindEligible = false;
+      clip.hasListened = Boolean(clip.listenCount > 0);
+      updateCompletedCount();
       advanceToNextMob();
       render();
     };
@@ -1247,6 +1460,7 @@ function renderRecord(root) {
 
 function renderExport(root) {
   const items = recordItems();
+  const summary = challengeSummaryStats();
   const ready = items.filter((entry) => {
     const clip = getClipState(entry.mob, entry.clipKey);
     return clip.accepted && clip.recording?.blob;
@@ -1262,8 +1476,6 @@ function renderExport(root) {
   }).length;
   const logText = state.exportLogs.join("\n") || state.exportLog;
   const showLogOpen = /failed|error/i.test(`${state.busyMsg} ${state.exportLog}`);
-  const reveal2 = state.revealPhase >= 2;
-  const reveal3 = state.revealPhase >= 3;
   const currentAnalysisSignature = analysisSignature();
   if (
     currentAnalysisSignature !== state.closenessAnalysis.lastSignature &&
@@ -1274,6 +1486,11 @@ function renderExport(root) {
     });
   }
   const closeness = state.closenessAnalysis;
+  const isAnalyzing = closeness.status === "idle" || closeness.status === "loading";
+  const showResults = !isAnalyzing;
+  const totalForProgress = Math.max(1, Number(closeness.totalCount || items.length || 1));
+  const processedForProgress = Math.max(0, Math.min(totalForProgress, Number(closeness.processedCount || 0)));
+  const loadingPct = Math.max(8, Math.min(96, Math.round((processedForProgress / totalForProgress) * 100)));
   const scoredRows = closeness.results.filter((row) => row.status === "scored");
   const chartRows = closeness.results.map((row, idx) => {
     const pct = row.pct ?? 0;
@@ -1292,36 +1509,71 @@ function renderExport(root) {
     </div>`;
   });
   const closenessHeadline =
-    closeness.status === "loading"
-      ? "Analyzing your mob impressions..."
-      : closeness.status === "error"
-        ? "Closeness analysis failed"
-        : closeness.overallPct == null
-          ? "No scored comparisons yet"
-          : `${closeness.overallPct}% Total Closeness`;
+    closeness.status === "error"
+      ? "Similarity check failed"
+      : closeness.overallPct == null
+        ? "No scored comparisons yet"
+        : `${closeness.overallPct}% Total Closeness`;
   const closenessSubline =
-    closeness.status === "loading"
-      ? "Comparing wave shape, timing, loudness, and rhythm for each mob."
-      : closeness.status === "error"
-        ? closeness.error || "Try going back, re-recording, and finishing again."
-        : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
+    closeness.status === "error"
+      ? closeness.error || "Try going back, re-recording, and finishing again."
+      : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
+  const finalScore = Math.round(state.score);
+  const title = scoreTitle(finalScore);
 
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-export">
       <div class="export-hero">
-        <div class="ready-badge" aria-hidden="true">🏆</div>
-        <h2 class="export-headline">Challenge Complete</h2>
-        <p class="export-reveal-line ${reveal2 ? "is-visible" : ""}">You didn't just finish a challenge...</p>
-        <p class="export-reveal-line ${reveal3 ? "is-visible" : ""}">You replaced Minecraft.</p>
-        <div class="export-pack-card ${reveal3 ? "is-visible" : ""}">
-          <h3>Your sound drop is ready</h3>
-          <div class="export-actions">
-            <button id="build" class="export-primary-btn" ${ready.length && reveal3 ? "" : "disabled"}>Download My Mob Sound Pack</button>
-            <button id="guide" class="export-secondary-btn">How to install</button>
+        <h2 class="export-headline">Mob Voice Challenge!</h2>
+        <section class="run-summary-card">
+          <h3>Run Summary</h3>
+          <p>Final Score: <strong>${finalScore}</strong></p>
+          <p>Title: <strong>${escapeHtml(title)}</strong></p>
+          <p>Blind Takes Count: <strong>${summary.blindTakes}</strong></p>
+          <p>Total Retries: <strong>${summary.totalRetries}</strong></p>
+          <p>Total Listens: <strong>${summary.totalListens}</strong></p>
+          <p>Skipped Mobs: <strong>${summary.skippedMobs}</strong></p>
+        </section>
+        ${
+          isAnalyzing
+            ? `<div class="similarity-loading-card">
+          <p class="similarity-loading-title">Calculating Recording Similarities...</p>
+          <div class="similarity-loading-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${loadingPct}">
+            <span class="similarity-loading-fill" style="--analysis-pct:${loadingPct};"></span>
           </div>
+          <p class="note">Compared ${processedForProgress}/${totalForProgress} recordings so far.</p>
+        </div>`
+            : ""
+        }
+      </div>
+      ${
+        showResults
+          ? `<section class="closeness-panel">
+        <div class="closeness-total">
+          <p class="closeness-kicker">Your Results</p>
+          <h3>${escapeHtml(closenessHeadline)}</h3>
+          <p class="note">${escapeHtml(closenessSubline)}</p>
+          <div class="closeness-total-ring" style="--total-pct:${Math.max(0, closeness.overallPct || 0)};">
+            <span>${closeness.overallPct == null ? "--" : `${closeness.overallPct}%`}</span>
+          </div>
+          <p class="note">Total points: <strong>${Math.round(state.displayedScore)}</strong></p>
+        </div>
+        <div class="closeness-chart">
+          ${chartRows.length ? chartRows.join("") : '<p class="note">No mobs to analyze yet.</p>'}
+        </div>
+      </section>
+      <section class="gift-pack-card">
+        <p class="gift-pack-message">Our gift to you! We used your recordings to create a resourcepack for the game!</p>
+        <div class="export-actions">
+          <button id="build" class="export-primary-btn" ${ready.length ? "" : "disabled"}>Download Resource Pack</button>
+          <button id="guide" class="export-secondary-btn">How to install</button>
         </div>
         ${nonOggCount > 0 ? `<p class="warn-note">${nonOggCount} clip(s) will be converted to OGG during export.</p>` : ""}
+      </section>`
+          : ""
+      }
+      <div class="export-hero">
         <div class="export-bottom-row">
           <button id="restart" class="ghost-btn">Back to Challenge</button>
           <button id="start-over" class="ghost-btn">Start Over</button>
@@ -1332,19 +1584,6 @@ function renderExport(root) {
         </div>
         <p id="busy" class="note"></p>
       </div>
-      <section class="closeness-panel ${closeness.status === "loading" ? "is-loading" : ""}">
-        <div class="closeness-total">
-          <p class="closeness-kicker">Original vs Your Voice</p>
-          <h3>${escapeHtml(closenessHeadline)}</h3>
-          <p class="note">${escapeHtml(closenessSubline)}</p>
-          <div class="closeness-total-ring" style="--total-pct:${Math.max(0, closeness.overallPct || 0)};">
-            <span>${closeness.overallPct == null ? "--" : `${closeness.overallPct}%`}</span>
-          </div>
-        </div>
-        <div class="closeness-chart">
-          ${chartRows.length ? chartRows.join("") : '<p class="note">No mobs to analyze yet.</p>'}
-        </div>
-      </section>
       <input id="raw-import" type="file" accept=".zip,application/zip" hidden />
       <details class="install-details">
         <summary>How to install</summary>
@@ -1367,17 +1606,23 @@ function renderExport(root) {
     </section>`
   );
 
-  root.querySelector("#build").onclick = async () => {
-    await buildAndDownloadPack();
-    render();
-  };
-  root.querySelector("#guide").onclick = () => {
-    const details = root.querySelector(".install-details");
-    if (details) {
-      details.open = true;
-      details.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
+  const buildBtn = root.querySelector("#build");
+  if (buildBtn) {
+    buildBtn.onclick = async () => {
+      await buildAndDownloadPack();
+      render();
+    };
+  }
+  const guideBtn = root.querySelector("#guide");
+  if (guideBtn) {
+    guideBtn.onclick = () => {
+      const details = root.querySelector(".install-details");
+      if (details) {
+        details.open = true;
+        details.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    };
+  }
   root.querySelector("#raw").onclick = async () => {
     await downloadRawRecordings();
   };
@@ -1453,7 +1698,7 @@ function renderExport(root) {
   const ins = root.querySelector("#instructions");
   const downloadedLine = state.lastZipName
     ? `<p><strong>Latest download:</strong> <code>${escapeHtml(state.lastZipName)}</code></p>`
-    : `<p>After you click <strong>Download My Mob Sound Pack</strong>, move that zip file using the steps below.</p>`;
+    : `<p>After you click <strong>Download Resource Pack</strong>, move that zip file using the steps below.</p>`;
   ins.innerHTML = `<div class="install-card">
       <h3>Install in Minecraft</h3>
       ${downloadedLine}
@@ -1530,6 +1775,7 @@ function stopHintAudio() {
 async function toggleOriginalHintForMob(mob) {
   const mobId = normalizeMobId(mob?.id);
   if (!mobId) return;
+  const clip = getClipState(mob, BASIC_CLIP_KEY);
 
   if (state.hintPlayingMobId === mobId && state.hintAudio) {
     stopHintAudio();
@@ -1556,6 +1802,17 @@ async function toggleOriginalHintForMob(mob) {
       render();
     };
     await audio.play();
+    const priorPlays = Number(clip.listenCount || 0);
+    clip.listenCount = priorPlays + 1;
+    clip.hasListened = true;
+    clip.originalHintPlayCount = clip.listenCount;
+    if (!clip.recording?.blob && priorPlays === 0) {
+      clip.blindEligible = false;
+    }
+    const priorPenalizedListens = Math.min(Math.max(0, priorPlays - 1), ORIGINAL_REPLAY_PENALTY_CAP / ORIGINAL_REPLAY_PENALTY);
+    if (priorPlays >= 1 && priorPenalizedListens < ORIGINAL_REPLAY_PENALTY_CAP / ORIGINAL_REPLAY_PENALTY) {
+      applyScoreDelta(-ORIGINAL_REPLAY_PENALTY);
+    }
   } catch (err) {
     state.recordNotice = `Could not play original sound for ${mob.mob}.`;
     logExport(`Hint playback failed for ${mobId}: ${String(err?.message || err)}`);
@@ -1600,9 +1857,11 @@ async function startRecording(item) {
   }
   const { mob, clipKey } = item;
   const clip = getClipState(mob, clipKey);
+  const hadPriorRecording = Boolean(clip.recording?.blob);
 
   state.chunks = [];
   state.isRecording = true;
+  state.recordingPeak = 0;
   const mimeType = pickMimeType();
   if (!mimeType) {
     state.isRecording = false;
@@ -1612,6 +1871,10 @@ async function startRecording(item) {
     return;
   }
   state.recorder = new MediaRecorder(state.mediaStream, mimeType ? { mimeType } : undefined);
+  if (hadPriorRecording) {
+    clip.retryCount = Math.max(0, clip.retryCount || 0) + 1;
+    applyScoreDelta(-RETRY_PENALTY);
+  }
   const startAt = Date.now();
   const maxMs = maxRecordingMs(mob);
   state.recordingMaxMs = maxMs;
@@ -1622,9 +1885,20 @@ async function startRecording(item) {
   };
 
   state.recorder.onstop = () => {
-    const blob = new Blob(state.chunks, { type: state.recorder.mimeType || "audio/webm" });
+    const blob = new Blob(state.chunks, { type: state.recorder?.mimeType || mimeType || "audio/webm" });
+    const recordingPeak = Number(state.recordingPeak || 0);
+    const recordedSeconds = blob.size ? (Date.now() - startAt) / 1000 : 0;
     clearMeter();
     clearRecordingCountdown();
+    const isBlankRecording =
+      !blob.size || recordedSeconds < MIN_VALID_RECORDING_SECONDS || recordingPeak < MIN_VALID_RECORDING_PEAK;
+    if (isBlankRecording) {
+      state.recordNotice = "No voice was detected, so that recording was not saved.";
+      state.isRecording = false;
+      setRecordingUiActive(false);
+      render();
+      return;
+    }
     if (state.previewClipId === clipIdFor(mob, clipKey)) stopPreviewAudio();
     if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
     clip.recording = {
@@ -1634,9 +1908,20 @@ async function startRecording(item) {
     };
     clip.takes = Math.max(0, clip.takes || 0) + 1;
     clip.accepted = false;
-    clip.seconds = blob.size ? (Date.now() - startAt) / 1000 : 0;
+    clip.skipped = false;
+    clip.seconds = recordedSeconds;
+    clip.hasListened = Number(clip.listenCount || 0) > 0;
+    if (!hadPriorRecording) {
+      clip.blindEligible = !clip.hasListened;
+      clip.riskChipDismissed = true;
+      if (clip.blindEligible && !clip.blindToastShown) {
+        clip.blindToastShown = true;
+        triggerBlindBonusToast();
+      }
+    }
+    updateCompletedCount();
+    state.recordNotice = "";
     state.isRecording = false;
-    state.holdActive = false;
     setRecordingUiActive(false);
     render();
     if (!blob.type.includes("ogg")) {
@@ -1650,10 +1935,6 @@ async function startRecording(item) {
   startRecordingCountdown(maxMs);
   state.recorder.start();
   state.hasStartedRecording = true;
-  if (!state.holdActive) {
-    stopRecording();
-    return;
-  }
   setRecordingUiActive(true);
 }
 
@@ -1671,57 +1952,30 @@ function stopRecording() {
   }
 }
 
-function clearHoldReleaseTimer() {
-  if (state.holdReleaseStopTimer) {
-    clearTimeout(state.holdReleaseStopTimer);
-    state.holdReleaseStopTimer = null;
-  }
-}
-
 function setRecordingUiActive(isActive) {
   const recordBtn = document.querySelector("#record");
   if (recordBtn) {
     recordBtn.classList.toggle("recording", isActive);
     const label = recordBtn.querySelector(".record-pill-label") || recordBtn.querySelector("span");
-    if (label) label.textContent = isActive ? "Release to Stop" : "Hold to Imitate";
+    if (label) {
+      const currentMob = state.mobs[state.recordIndex];
+      const currentClip = currentMob ? getClipState(currentMob, activeClipKeyForMob()) : null;
+      label.textContent = isActive ? "Stop Recording" : idleRecordButtonLabel(currentClip);
+    }
   }
-  const ring = document.querySelector(".countdown-ring");
-  if (ring) ring.classList.toggle("active", isActive);
+  updateRecordingIndicator();
 }
 
-function wireHoldToRecord(button, item) {
+function wireRecordToggle(button, item) {
   if (!button) return;
-  const startHold = async (ev) => {
+  button.onclick = async (ev) => {
     if (ev) ev.preventDefault();
     if (getClipState(item.mob, item.clipKey).converting) return;
-    if (state.isRecording) return;
-    clearHoldReleaseTimer();
-    state.holdActive = true;
-    try {
-      if (ev?.pointerId != null && button.setPointerCapture) {
-        button.setPointerCapture(ev.pointerId);
-      }
-    } catch {}
-    await startRecording(item);
-  };
-
-  const endHold = () => {
-    state.holdActive = false;
-    clearHoldReleaseTimer();
-    stopRecording();
-  };
-
-  button.onpointerdown = startHold;
-  button.onpointerup = endHold;
-  button.onpointercancel = endHold;
-  button.onlostpointercapture = endHold;
-  button.onkeydown = async (ev) => {
-    if ((ev.key === " " || ev.key === "Enter") && !state.holdActive) {
-      await startHold(ev);
+    if (state.isRecording) {
+      stopRecording();
+      return;
     }
-  };
-  button.onkeyup = (ev) => {
-    if (ev.key === " " || ev.key === "Enter") endHold();
+    await startRecording(item);
   };
 }
 
@@ -1761,6 +2015,9 @@ async function convertClipRecordingToOgg(mob, clipKey = BASIC_CLIP_KEY) {
 function startRecordingCountdown(maxMs) {
   clearRecordingCountdown();
   const startedAt = Date.now();
+  state.recordingMaxMs = maxMs;
+  state.recordingRemainingMs = maxMs;
+  updateRecordingIndicator();
 
   state.recordStopTimer = window.setTimeout(() => {
     if (state.isRecording) stopRecording();
@@ -1769,13 +2026,7 @@ function startRecordingCountdown(maxMs) {
   state.recordCountdownTimer = window.setInterval(() => {
     const elapsed = Date.now() - startedAt;
     state.recordingRemainingMs = Math.max(0, maxMs - elapsed);
-    const ring = document.querySelector(".countdown-ring");
-    const label = ring?.querySelector("span");
-    if (ring) {
-      const pct = Math.round((state.recordingRemainingMs / maxMs) * 100);
-      ring.style.setProperty("--ring-pct", String(pct));
-    }
-    if (label) label.textContent = `${(state.recordingRemainingMs / 1000).toFixed(1)}s`;
+    updateRecordingIndicator();
   }, 50);
 }
 
@@ -1790,6 +2041,31 @@ function clearRecordingCountdown() {
   }
   state.recordingMaxMs = 0;
   state.recordingRemainingMs = 0;
+  updateRecordingIndicator();
+}
+
+function updateRecordingIndicator() {
+  const maxMs = state.recordingMaxMs || 5000;
+  const remainingMs = state.isRecording ? state.recordingRemainingMs : maxMs;
+  const pct = Math.round((Math.max(0, remainingMs) / Math.max(1, maxMs)) * 100);
+  const seconds = formatSeconds(remainingMs / 1000);
+
+  const indicator = document.querySelector(".recording-indicator");
+  if (indicator) indicator.classList.toggle("active", state.isRecording);
+
+  const status = document.querySelector(".recording-status-text");
+  if (status) status.textContent = state.isRecording ? "Recording now" : "Ready to record";
+
+  const timeValue = document.querySelector(".recording-time-value");
+  if (timeValue) timeValue.textContent = seconds;
+
+  const ring = document.querySelector(".countdown-ring");
+  if (ring) {
+    ring.classList.toggle("active", state.isRecording);
+    ring.style.setProperty("--ring-pct", String(pct));
+  }
+  const ringLabel = ring?.querySelector("span");
+  if (ringLabel) ringLabel.textContent = seconds;
 }
 
 function startMeter() {
@@ -1807,6 +2083,9 @@ function startMeter() {
       const v = Math.abs((data[i] - 128) / 128);
       if (v > peak) peak = v;
     }
+    if (state.isRecording) {
+      state.recordingPeak = Math.max(Number(state.recordingPeak || 0), peak);
+    }
     state.meterPct = Math.min(100, Math.max(2, peak * 160));
     const fill = document.querySelector(".level-meter-fill");
     if (fill) fill.style.width = `${state.meterPct}%`;
@@ -1819,6 +2098,7 @@ function clearMeter() {
     state.meterTimer = null;
   }
   state.meterPct = 0;
+  state.recordingPeak = 0;
 }
 
 async function loadFfmpeg() {
@@ -2237,14 +2517,21 @@ async function importRawRecordingsZip(file, options = {}) {
       };
       clip.seconds = seconds;
       clip.accepted = true;
+      clip.skipped = false;
       clip.converting = false;
       clip.takes = Math.max(clip.takes || 0, 1);
+      clip.retryCount = Math.max(clip.retryCount || 0, Math.max(0, clip.takes - 1));
+      clip.listenCount = Math.max(clip.listenCount || 0, 1);
+      clip.hasListened = true;
+      clip.blindEligible = false;
+      clip.blindBonusAwarded = false;
       clip.pointsAwarded = true;
       imported += 1;
     }
 
     state.busyMsg = `Imported ${imported} recording(s).`;
     logExport(`Import complete: ${imported} recording(s) loaded.`);
+    updateCompletedCount();
     if (goToExport && imported > 0) {
       advanceToReveal();
     }
