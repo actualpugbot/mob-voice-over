@@ -12,7 +12,7 @@
   ],
   "mobSets": {
     "basic": {
-      "label": "Starter (15 mobs)",
+      "label": "Starter (10 mobs)",
       "mobs": [
         {
           "id": "zombie",
@@ -22,6 +22,26 @@
           "styleHints": [],
           "soundEventKeys": [
             "entity.zombie.ambient"
+          ]
+        },
+        {
+          "id": "villager",
+          "mob": "Villager",
+          "image": "public/assets/mobs/villager.png",
+          "lengthHintMs": 1000,
+          "styleHints": [],
+          "soundEventKeys": [
+            "entity.villager.ambient"
+          ]
+        },
+        {
+          "id": "spider",
+          "mob": "Spider",
+          "image": "public/assets/mobs/spider.png",
+          "lengthHintMs": 1000,
+          "styleHints": [],
+          "soundEventKeys": [
+            "entity.spider.ambient"
           ]
         },
         {
@@ -57,16 +77,6 @@
           ]
         },
         {
-          "id": "spider",
-          "mob": "Spider",
-          "image": "public/assets/mobs/spider.png",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.spider.ambient"
-          ]
-        },
-        {
           "id": "sheep",
           "mob": "Sheep",
           "image": "public/assets/mobs/sheep.png",
@@ -74,26 +84,6 @@
           "styleHints": [],
           "soundEventKeys": [
             "entity.sheep.ambient"
-          ]
-        },
-        {
-          "id": "enderman",
-          "mob": "Enderman",
-          "image": "public/assets/mobs/enderman.png",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.enderman.ambient"
-          ]
-        },
-        {
-          "id": "chicken",
-          "mob": "Chicken",
-          "image": "public/assets/mobs/chicken.gif",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.chicken.ambient"
           ]
         },
         {
@@ -107,48 +97,13 @@
           ]
         },
         {
-          "id": "horse",
-          "mob": "Horse",
-          "image": "public/assets/mobs/horse.gif",
+          "id": "chicken",
+          "mob": "Chicken",
+          "image": "public/assets/mobs/chicken.gif",
           "lengthHintMs": 1000,
           "styleHints": [],
           "soundEventKeys": [
-            "entity.horse.ambient"
-          ]
-        },
-        {
-          "id": "dolphin",
-          "mob": "Dolphin",
-          "image": "public/assets/mobs/dolphin.gif",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.dolphin.ambient"
-          ]
-        },
-        {
-          "id": "donkey",
-          "mob": "Donkey",
-          "image": "public/assets/mobs/donkey.png",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.donkey.ambient"
-          ]
-        },
-        {
-          "id": "wolf",
-          "mob": "Wolf",
-          "image": "public/assets/mobs/wolf.png",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.wolf.ambient",
-            "entity.wolf_big.ambient",
-            "entity.wolf_cute.ambient",
-            "entity.wolf_grumpy.ambient",
-            "entity.wolf_puglin.ambient",
-            "entity.wolf_sad.ambient"
+            "entity.chicken.ambient"
           ]
         },
         {
@@ -159,16 +114,6 @@
           "styleHints": [],
           "soundEventKeys": [
             "entity.cat.ambient"
-          ]
-        },
-        {
-          "id": "villager",
-          "mob": "Villager",
-          "image": "public/assets/mobs/villager.png",
-          "lengthHintMs": 1000,
-          "styleHints": [],
-          "soundEventKeys": [
-            "entity.villager.ambient"
           ]
         }
       ]

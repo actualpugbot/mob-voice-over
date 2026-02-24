@@ -20,6 +20,11 @@ Browser-based recorder for generating a Minecraft Java resource pack that replac
 └── .github/workflows/pages.yml   # GitHub Pages deploy workflow
 ```
 
+Current mob image assets in `public/assets/mobs`:
+- Total files: 117
+- PNG files: 80
+- GIF files: 37
+
 ## Local Development
 
 Requirements:

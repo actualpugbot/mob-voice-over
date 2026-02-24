@@ -1,8 +1,13 @@
 const app = document.getElementById("app");
 
-const PACK_NAME = "Mob Voice Over";
-const PACK_DESCRIPTION = "Mob voices recorded with Mob Voice Over";
+const APP_TITLE = "Mob Impression Challenge";
+const RESOURCE_PACK_NAME = "Mob Voice Over";
+const PACK_DESCRIPTION = "Mob impressions recorded with Mob Impression Challenge";
 const DEFAULT_PACK_FORMAT = 75;
+const STARTING_SCORE = 1000;
+const ACCEPT_POINTS = 120;
+const RETRY_PENALTY = 25;
+const SKIP_PENALTY = 100;
 const DEFAULT_MOB_IMAGE = "public/assets/mobs/unknown_mob.png";
 const DEFAULT_MOB_SET_ID = "basic";
 const BASIC_CLIP_KEY = "__mob_default__";
@@ -236,18 +241,13 @@ const GIF_MOB_IMAGE_IDS = new Set([
   "elder_guardian",
   "ender_dragon",
   "endermite",
-  "fox",
   "ghast",
   "glow_squid",
-  "goat",
   "guardian",
   "hoglin",
-  "horse",
   "magma_cube",
-  "panda",
   "phantom",
   "polar_bear",
-  "pufferfish",
   "salmon",
   "silverfish",
   "slime",
@@ -259,8 +259,17 @@ const GIF_MOB_IMAGE_IDS = new Set([
   "warden",
   "zoglin",
 ]);
+const PUFFERFISH_IMAGE_SEQUENCE = Object.freeze([
+  { src: "public/assets/mobs/pufferfish_small.gif", durationMs: 2000 },
+  { src: "public/assets/mobs/pufferfish_medium.gif", durationMs: 500 },
+  { src: "public/assets/mobs/pufferfish_large.gif", durationMs: 4000 },
+  { src: "public/assets/mobs/pufferfish_medium.gif", durationMs: 500 }
+]);
 const LOCAL_MOB_SOUND_LIBRARY_PATH = "public/assets/mob_sounds/index.json";
 const originalSoundUrlCache = new Map();
+const originalFeatureCache = new Map();
+const MIN_ANALYSIS_RMS = 1e-5;
+const ENVELOPE_BINS = 72;
 
 const state = {
   config: null,
@@ -299,7 +308,24 @@ const state = {
   mobSoundLibrary: null,
   showAddMobPanel: false,
   addMobInput: "",
-  recordNotice: ""
+  recordNotice: "",
+  score: STARTING_SCORE,
+  hasStartedRecording: false,
+  revealPhase: 0,
+  revealTimers: [],
+  analysisAudioCtx: null,
+  closenessRunId: 0,
+  closenessAnalysis: {
+    status: "idle",
+    lastSignature: "",
+    overallPct: null,
+    comparedCount: 0,
+    totalCount: 0,
+    results: [],
+    error: ""
+  },
+  mobImageLoopTimer: null,
+  mobImageLoopToken: 0
 };
 
 function createClipState() {
@@ -307,7 +333,9 @@ function createClipState() {
     recording: null,
     accepted: false,
     seconds: 0,
-    converting: false
+    converting: false,
+    takes: 0,
+    pointsAwarded: false
   };
 }
 
@@ -327,6 +355,7 @@ const normalizeMobId = (value) =>
     .replace(/^_+|_+$/g, "");
 
 const defaultImageForMob = (id) => {
+  if (id === "pufferfish") return "public/assets/mobs/pufferfish_small.gif";
   const extraExt = EXTRA_MOB_IMAGE_EXTENSIONS[id];
   if (extraExt) return `public/assets/mobs/${id}.${extraExt}`;
   if (!VANILLA_MOB_IDS.includes(id)) return DEFAULT_MOB_IMAGE;
@@ -411,6 +440,233 @@ async function originalSoundUrlForMob(mob) {
   return url;
 }
 
+function analysisSignature() {
+  return recordItems()
+    .map((entry) => {
+      const clip = getClipState(entry.mob, entry.clipKey);
+      const blob = clip.recording?.blob;
+      return [
+        entry.mob.id,
+        clip.accepted ? "1" : "0",
+        blob ? String(blob.size) : "0",
+        blob ? String(blob.type || "") : "",
+        Number(clip.seconds || 0).toFixed(3)
+      ].join("|");
+    })
+    .join(";");
+}
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) return 0;
+  const len = Math.min(a.length, b.length);
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < len; i += 1) {
+    const va = Number(a[i] || 0);
+    const vb = Number(b[i] || 0);
+    dot += va * vb;
+    magA += va * va;
+    magB += vb * vb;
+  }
+  if (!magA || !magB) return 0;
+  return clamp01(dot / Math.sqrt(magA * magB));
+}
+
+function buildEnvelope(samples, bins = ENVELOPE_BINS) {
+  if (!samples?.length) return [];
+  const length = samples.length;
+  const size = Math.max(1, Math.floor(length / bins));
+  const envelope = [];
+
+  for (let start = 0; start < length; start += size) {
+    const end = Math.min(length, start + size);
+    let sum = 0;
+    for (let i = start; i < end; i += 1) {
+      sum += Math.abs(samples[i]);
+    }
+    envelope.push(sum / Math.max(1, end - start));
+  }
+  return envelope;
+}
+
+function deltaSeries(values) {
+  if (!Array.isArray(values) || values.length < 2) return [];
+  const out = [];
+  for (let i = 1; i < values.length; i += 1) {
+    out.push(values[i] - values[i - 1]);
+  }
+  return out;
+}
+
+function analyzeSamples(samples, sampleRate) {
+  if (!samples?.length || !sampleRate) return null;
+  let energy = 0;
+  let crossings = 0;
+  let prev = samples[0];
+  for (let i = 0; i < samples.length; i += 1) {
+    const v = samples[i];
+    energy += v * v;
+    if (i > 0 && ((v >= 0 && prev < 0) || (v < 0 && prev >= 0))) crossings += 1;
+    prev = v;
+  }
+
+  const rms = Math.sqrt(energy / samples.length);
+  const envelope = buildEnvelope(samples, ENVELOPE_BINS);
+  return {
+    durationSec: samples.length / sampleRate,
+    rms,
+    zcr: crossings / Math.max(1, samples.length),
+    envelope,
+    envelopeDelta: deltaSeries(envelope)
+  };
+}
+
+function monoSamplesFromBuffer(audioBuffer) {
+  const channels = audioBuffer.numberOfChannels || 1;
+  const length = audioBuffer.length || 0;
+  const mono = new Float32Array(length);
+  for (let c = 0; c < channels; c += 1) {
+    const data = audioBuffer.getChannelData(c);
+    for (let i = 0; i < length; i += 1) {
+      mono[i] += data[i] / channels;
+    }
+  }
+  return mono;
+}
+
+async function decodeAudioBlob(blob) {
+  if (!blob) return null;
+  state.analysisAudioCtx = state.analysisAudioCtx || new AudioContext();
+  const buffer = await state.analysisAudioCtx.decodeAudioData(await blob.arrayBuffer());
+  return analyzeSamples(monoSamplesFromBuffer(buffer), buffer.sampleRate);
+}
+
+async function originalFeaturesForMob(mob) {
+  const url = await originalSoundUrlForMob(mob);
+  if (!url) return null;
+  if (originalFeatureCache.has(url)) return originalFeatureCache.get(url);
+
+  const featurePromise = (async () => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to load original audio (${res.status})`);
+    const blob = await res.blob();
+    return decodeAudioBlob(blob);
+  })();
+
+  originalFeatureCache.set(url, featurePromise);
+  try {
+    return await featurePromise;
+  } catch (err) {
+    originalFeatureCache.delete(url);
+    throw err;
+  }
+}
+
+function scoreCloseness(recorded, original) {
+  if (!recorded || !original) return null;
+  const durationScore =
+    1 - Math.min(1, Math.abs(recorded.durationSec - original.durationSec) / Math.max(recorded.durationSec, original.durationSec, 0.001));
+  const rmsScore =
+    1 - Math.min(1, Math.abs(Math.log(Math.max(recorded.rms, MIN_ANALYSIS_RMS)) - Math.log(Math.max(original.rms, MIN_ANALYSIS_RMS))) / 2.4);
+  const zcrScore = 1 - Math.min(1, Math.abs(recorded.zcr - original.zcr) / Math.max(recorded.zcr, original.zcr, 0.001));
+  const envelopeScore = cosineSimilarity(recorded.envelope, original.envelope);
+  const motionScore = cosineSimilarity(recorded.envelopeDelta, original.envelopeDelta);
+
+  const weighted =
+    envelopeScore * 0.42 + durationScore * 0.2 + rmsScore * 0.14 + zcrScore * 0.14 + motionScore * 0.1;
+  return Math.round(clamp01(weighted) * 100);
+}
+
+async function runClosenessAnalysis(signature) {
+  const runId = state.closenessRunId + 1;
+  state.closenessRunId = runId;
+  state.closenessAnalysis = {
+    ...state.closenessAnalysis,
+    status: "loading",
+    lastSignature: signature,
+    error: ""
+  };
+  render();
+
+  try {
+    const items = recordItems();
+    const results = [];
+    let totalPct = 0;
+    let comparedCount = 0;
+
+    for (let i = 0; i < items.length; i += 1) {
+      const entry = items[i];
+      const clip = getClipState(entry.mob, entry.clipKey);
+      const row = {
+        mobId: entry.mob.id,
+        mobName: entry.mob.mob,
+        status: "missing",
+        pct: null
+      };
+
+      if (!clip.accepted) {
+        row.status = "missing";
+      } else if (!clip.recording?.blob) {
+        row.status = "skipped";
+      } else {
+        try {
+          const [recordedFeatures, originalFeatures] = await Promise.all([
+            decodeAudioBlob(clip.recording.blob),
+            originalFeaturesForMob(entry.mob)
+          ]);
+          const pct = scoreCloseness(recordedFeatures, originalFeatures);
+          if (pct == null) {
+            row.status = "no-original";
+          } else {
+            row.status = "scored";
+            row.pct = pct;
+            totalPct += pct;
+            comparedCount += 1;
+          }
+        } catch (err) {
+          row.status = "error";
+          logExport(`Closeness analysis failed for ${entry.mob.id}: ${String(err?.message || err)}`);
+        }
+      }
+      results.push(row);
+    }
+
+    if (runId !== state.closenessRunId) return;
+    state.closenessAnalysis = {
+      status: "ready",
+      lastSignature: signature,
+      overallPct: comparedCount ? Math.round(totalPct / comparedCount) : null,
+      comparedCount,
+      totalCount: results.length,
+      results,
+      error: ""
+    };
+    render();
+  } catch (err) {
+    if (runId !== state.closenessRunId) return;
+    state.closenessAnalysis = {
+      ...state.closenessAnalysis,
+      status: "error",
+      lastSignature: signature,
+      error: String(err?.message || err)
+    };
+    render();
+  }
+}
+
+function closenessStatusLabel(status) {
+  if (status === "scored") return "Scored";
+  if (status === "skipped") return "Skipped";
+  if (status === "no-original") return "No Original";
+  if (status === "error") return "Error";
+  return "Missing";
+}
+
 function createMobDefinition(id, overrides = {}) {
   const cleanId = normalizeMobId(id);
   const name = overrides.mob || toTitleCase(cleanId);
@@ -462,6 +718,37 @@ function wireMobImageFallback(imgEl, id, preferredPath) {
     }
     imgEl.onerror = null;
   };
+}
+
+function stopMobImageLoop() {
+  if (state.mobImageLoopTimer) {
+    clearTimeout(state.mobImageLoopTimer);
+    state.mobImageLoopTimer = null;
+  }
+  state.mobImageLoopToken += 1;
+}
+
+function startPufferfishImageLoop(imgEl) {
+  stopMobImageLoop();
+  const token = state.mobImageLoopToken;
+  let seqIndex = 0;
+
+  const applyFrame = () => {
+    if (token !== state.mobImageLoopToken) return;
+    const currentMob = state.mobs[state.recordIndex];
+    if (!imgEl?.isConnected || normalizeMobId(currentMob?.id) !== "pufferfish") {
+      stopMobImageLoop();
+      return;
+    }
+
+    const frame = PUFFERFISH_IMAGE_SEQUENCE[seqIndex];
+    if (!frame) return;
+    imgEl.src = frame.src;
+    seqIndex = (seqIndex + 1) % PUFFERFISH_IMAGE_SEQUENCE.length;
+    state.mobImageLoopTimer = window.setTimeout(applyFrame, frame.durationMs);
+  };
+
+  applyFrame();
 }
 
 function parseMobInput(rawInput) {
@@ -516,7 +803,42 @@ function resolveMobSet(setId) {
   return [...base, ...(set.mobs || [])].map((mob) => hydrateMobEntry(mob));
 }
 
+function clearRevealTimers() {
+  if (!Array.isArray(state.revealTimers)) return;
+  state.revealTimers.forEach((id) => clearTimeout(id));
+  state.revealTimers = [];
+}
+
+function beginTwistReveal() {
+  clearRevealTimers();
+  state.revealPhase = 1;
+  const phase2 = window.setTimeout(() => {
+    state.revealPhase = 2;
+    render();
+  }, 900);
+  const phase3 = window.setTimeout(() => {
+    state.revealPhase = 3;
+    render();
+  }, 1800);
+  state.revealTimers = [phase2, phase3];
+}
+
+function advanceToReveal() {
+  state.step = 1;
+  beginTwistReveal();
+}
+
+function advanceToNextMob() {
+  const isLastMob = state.recordIndex === state.mobs.length - 1;
+  if (isLastMob) {
+    advanceToReveal();
+    return;
+  }
+  state.recordIndex = Math.min(state.mobs.length - 1, state.recordIndex + 1);
+}
+
 function resetWorkflow() {
+  clearRevealTimers();
   stopPreviewAudio();
   stopHintAudio();
   state.mobs.forEach((mob) => {
@@ -536,6 +858,19 @@ function resetWorkflow() {
   state.showAddMobPanel = false;
   state.addMobInput = "";
   state.recordNotice = "";
+  state.score = STARTING_SCORE;
+  state.hasStartedRecording = false;
+  state.revealPhase = 0;
+  state.closenessRunId += 1;
+  state.closenessAnalysis = {
+    status: "idle",
+    lastSignature: "",
+    overallPct: null,
+    comparedCount: 0,
+    totalCount: 0,
+    results: [],
+    error: ""
+  };
 }
 
 function baseMobCount() {
@@ -645,20 +980,25 @@ function packMetaForExport() {
 }
 
 function render() {
+  stopMobImageLoop();
   app.innerHTML = "";
   const page = el(`<section class="sheet"></section>`);
 
   page.insertAdjacentHTML(
     "beforeend",
     `<header class="titlebar">
-      <div class="wood-sign">
-        <h1>${PACK_NAME}</h1>
+      <div class="page-hero">
+        <h1>${APP_TITLE}</h1>
+        <p class="subtitle">Can you sound like a game mob?</p>
       </div>
     </header>`
   );
 
   if (state.step === 0) renderRecord(page);
-  if (state.step === 1) renderExport(page);
+  if (state.step === 1) {
+    if (state.revealPhase === 0) beginTwistReveal();
+    renderExport(page);
+  }
 
   app.appendChild(page);
 }
@@ -684,68 +1024,130 @@ function renderRecord(root) {
   };
 
   const done = allItems.filter((entry) => getClipState(entry.mob, entry.clipKey).accepted).length;
-  const pct = Math.round((done / allItems.length) * 100);
   const maxMs = maxRecordingMs(mob);
   const maxSec = Math.round(maxMs / 1000);
   const isLastMob = state.recordIndex === state.mobs.length - 1;
   const clipSec = Math.max(0, clip.seconds || 0);
-  const clipTimeLabel = `${Math.floor(clipSec / 60)}:${String(Math.floor(clipSec % 60)).padStart(2, "0")}`;
-  const maxTimeLabel = `${Math.floor(maxSec / 60)}:${String(maxSec % 60).padStart(2, "0")}`;
   const hintMobId = normalizeMobId(mob.id);
   const hintPlaying = state.hintPlayingMobId === hintMobId && Boolean(state.hintAudio);
   const hintLoading = state.hintLoadingMobId === hintMobId;
-  const mobOptions = allMobOptions();
-  const existingMobIds = new Set(state.mobs.map((m) => normalizeMobId(m.id)));
-  const canAddMoreMobs = !hasAllKnownMobs();
-  if (!canAddMoreMobs && state.showAddMobPanel) {
-    state.showAddMobPanel = false;
-  }
-
+  const canAccept = Boolean(clip.recording?.url) && !clip.accepted && !state.isRecording && !clip.converting;
+  const canRetry = (Boolean(clip.recording?.url) || clip.accepted) && !state.isRecording && !clip.converting;
+  const takes = Math.max(0, clip.takes || 0);
+  const canGoNext = (clip.accepted || canAccept) && !state.isRecording && !clip.converting;
+  const nextLabel = clip.accepted ? (isLastMob ? "Finish" : "Next") : "Submit";
+  const scoreAfterAccept = state.score + ACCEPT_POINTS;
+  const acceptHint = canAccept
+    ? `Accepting this take sets score to ${scoreAfterAccept}.`
+    : "First take glory is real.";
+  const scorePct =
+    clip.recording?.blob && maxSec > 0 ? Math.min(100, Math.round((Math.max(0, clipSec) / maxSec) * 100)) : null;
+  const scoreLabel = scorePct == null ? "-- %" : `${scorePct} %`;
+  const scoreBarWidth = scorePct == null ? 0 : scorePct;
+  const leaderboardRows = [
+    { name: "Player123", points: 1450 },
+    { name: "MineMaster", points: 1320 },
+    { name: "BlockHero", points: 1250 },
+    { name: "CraftQueen", points: 1180 },
+    { name: "SteveFan", points: 1100 }
+  ];
+  const mobQueueRows = allItems.map((entry, idx) => {
+    const itemClip = getClipState(entry.mob, entry.clipKey);
+    const status = itemClip.accepted ? "Done" : "To Record";
+    return {
+      idx,
+      name: entry.mob.mob,
+      status,
+      isCurrent: idx === state.recordIndex
+    };
+  });
   root.insertAdjacentHTML(
     "beforeend",
-    `<section class="panel panel-record">
-      <input id="raw-import-first" type="file" accept=".zip,application/zip" hidden />
-      <div class="progress-wrap">
-        <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-        <p class="note">${done}/${allItems.length} complete</p>
-      </div>
-      <div class="record-stage">
-        <figure class="mob-card single">
-          <img alt="${escapeHtml(mob.mob)}" src="${escapeHtml(mob.image)}" referrerpolicy="no-referrer" />
-          <button
-            id="play-original-hint"
-            class="hint-corner-btn ${hintPlaying ? "playing" : ""}"
-            ${hintLoading ? "disabled" : ""}
-            title="play original sound"
-            aria-label="${hintPlaying ? "Stop original mob sound" : "Play original mob sound"}"
-          >▶</button>
-        </figure>
-        <div class="record-stage-main">
-          <div class="mob-card-copy">
-            <h3 class="nameplate">${escapeHtml(mob.mob)} <span class="nameplate-count">(${state.recordIndex + 1}/${state.mobs.length})</span></h3>
+    `<section class="panel panel-record panel-record-mock">
+      <div class="challenge-layout">
+        <section class="challenge-card">
+          <div class="challenge-card-head">
+            <h2>Your Challenge:</h2>
           </div>
-          <div class="record-cta-wrap">
-            <button id="record" class="record-pill-btn ${state.isRecording ? "recording" : ""}" ${clip.converting ? "disabled" : ""}>
-              <span class="record-pill-icon" aria-hidden="true">🎙</span>
-              <span class="record-pill-label">${state.isRecording ? "Release to Stop" : "Hold to Record"}</span>
+          <div class="challenge-stage">
+            <figure class="mob-card single">
+              <img alt="${escapeHtml(mob.mob)}" src="${escapeHtml(mob.image)}" referrerpolicy="no-referrer" />
+            </figure>
+            <p class="challenge-callout">${escapeHtml(mob.mob).toUpperCase()}</p>
+          </div>
+          <div class="challenge-actions">
+            <button
+              id="play-original-hint"
+              class="mock-btn mock-btn-green ${hintPlaying ? "playing" : ""}"
+              ${hintLoading ? "disabled" : ""}
+            >${hintPlaying ? "Stop Original Sound" : "Hear Original Sound"}</button>
+            <button id="record" class="mock-btn mock-btn-blue ${state.isRecording ? "recording" : ""}" ${
+              clip.converting || clip.accepted ? "disabled" : ""
+            }>
+              <span class="record-pill-label">${state.isRecording ? "Release to Stop" : "Record Your Voice!"}</span>
             </button>
-            <div class="aux-buttons">
-              <button
-                id="preview-recording"
-                class="play-triangle-btn ${state.previewClipId === item.clipId && state.previewAudio ? "playing" : ""}"
-                ${!clip.recording?.url || state.isRecording || clip.converting ? "disabled" : ""}
-                aria-label="${state.previewClipId === item.clipId && state.previewAudio ? "Stop playback" : "Play recording"}"
-              ><span class="play-icon" aria-hidden="true"></span></button>
-              <button id="skip-circle" class="skip-circle-btn" ${state.isRecording || clip.converting ? "disabled" : ""}>Skip</button>
-            </div>
           </div>
-        </div>
+          <div class="challenge-score-row">
+            <p>Your Recording Score: <strong>${scoreLabel}</strong></p>
+            <div class="countdown-ring" style="--ring-pct: ${scoreBarWidth}">
+              <span>${state.isRecording ? `${(state.recordingRemainingMs / 1000).toFixed(1)}s` : `${maxSec.toFixed(1)}s`}</span>
+            </div>
+            <button id="next" class="submit-btn" ${canGoNext ? "" : "disabled"}>${nextLabel}</button>
+          </div>
+          <div class="challenge-mini-controls">
+            <button
+              id="preview-recording"
+              class="ghost-btn"
+              ${!clip.recording?.url || state.isRecording || clip.converting ? "disabled" : ""}
+            >${state.previewClipId === item.clipId && state.previewAudio ? "Stop Playback" : "Play Recording"}</button>
+            <button id="retry-take" class="ghost-btn" ${canRetry ? "" : "disabled"}>Retry (-${RETRY_PENALTY})</button>
+            <button id="skip-circle" class="ghost-btn" ${
+              state.isRecording || clip.converting || clip.accepted ? "disabled" : ""
+            }>Skip (-${SKIP_PENALTY})</button>
+            <button id="prev" class="ghost-btn" ${state.recordIndex === 0 || state.isRecording ? "disabled" : ""}>Previous</button>
+          </div>
+          <p class="note">Round ${state.recordIndex + 1} of ${state.mobs.length}. Attempts: ${takes}. ${acceptHint}</p>
+        </section>
+        ${
+          state.hasStartedRecording
+            ? `<aside class="leaderboard-card mob-queue-card">
+          <h2>Mobs to Record</h2>
+          <ol class="mob-queue-list">
+            ${mobQueueRows
+              .map(
+                (row) => `<li class="${row.isCurrent ? "is-current" : ""}">
+              <span>${row.idx + 1}. ${escapeHtml(row.name)}</span>
+              <strong>${row.status}</strong>
+            </li>`
+              )
+              .join("")}
+          </ol>
+          <p class="note">Progress: <strong>${done}/${allItems.length}</strong> completed</p>
+        </aside>`
+            : `<aside class="leaderboard-card">
+          <h2>Leaderboard</h2>
+          <ol>
+            ${leaderboardRows
+              .map(
+                (row, idx) =>
+                  `<li><span>${idx + 1}. ${escapeHtml(row.name)}</span><strong>${row.points} pts</strong></li>`
+              )
+              .join("")}
+          </ol>
+          <button class="leaderboard-btn" type="button">View Full Rankings &gt;</button>
+          <p class="note">Your score: <strong>${state.score}</strong> | Mobs conquered: ${done}/${allItems.length}</p>
+        </aside>`
+        }
       </div>
-      <div class="meter-row meter-row-time">
-        <span class="play-hint">${clipTimeLabel} / ${maxTimeLabel}</span>
-        <span class="note">Max ${maxSec}s</span>
-      </div>
-      <div class="level-meter segmented"><div class="level-meter-fill" style="width:${state.meterPct}%"></div></div>
+      ${
+        state.hasStartedRecording
+          ? ""
+          : `<div class="steps-row">
+        <p><span>1</span> Listen to mob sound...</p>
+        <p><span>2</span> Record your best impression...</p>
+        <p><span>3</span> Climb the leaderboard!</p>
+      </div>`
+      }
       ${
         state.micStatus !== "ready"
           ? `<div class="stack">
@@ -759,45 +1161,8 @@ function renderRecord(root) {
           : ""
       }
       ${clip.converting ? '<p class="note">Converting recording to OGG...</p>' : ""}
-      <div class="pager">
-        <button id="prev" class="chunky-btn" ${state.recordIndex === 0 || state.isRecording ? "disabled" : ""}>◀ Previous</button>
-        <button id="next" class="chunky-btn" ${(clip.recording || clip.accepted) && !state.isRecording && !clip.converting ? "" : "disabled"}>${isLastMob ? "Done" : "Next ▶"}</button>
-      </div>
-      <button id="import-raw-first-btn" class="ghost-btn" ${state.isRecording ? "disabled" : ""}>Import Raw Recordings</button>
       ${
-        canAddMoreMobs || state.recordNotice
-          ? `<div class="stack">
-          ${
-            canAddMoreMobs
-              ? `<button id="toggle-add-mob" class="text-link-btn" ${state.isRecording || clip.converting ? "disabled" : ""}>Missing a mob? Add it!</button>`
-              : ""
-          }
-          ${
-            canAddMoreMobs && state.showAddMobPanel
-              ? `<form id="add-mob-form" class="add-mob-form">
-              <label>Quick pick mobs</label>
-              <div class="mob-checklist" id="mob-checklist">
-                ${mobOptions
-                  .map(
-                    (opt) => `<label class="mob-check-item ${existingMobIds.has(opt.id) ? "is-existing" : ""}">
-                    <input type="checkbox" name="mob-quick-pick" value="${escapeHtml(opt.id)}" ${existingMobIds.has(opt.id) ? "disabled" : ""} />
-                    <span>${escapeHtml(opt.label)}</span>
-                    ${existingMobIds.has(opt.id) ? '<span class="note">Added</span>' : ""}
-                  </label>`
-                  )
-                  .join("")}
-              </div>
-              <p class="note">Pick one or more mobs, then add the selection.</p>
-              <div class="add-mob-actions">
-                <button type="submit" class="ghost-btn">Add Selected</button>
-                <button type="button" id="add-all-mobs" class="ghost-btn">Add All Mobs</button>
-              </div>
-            </form>`
-              : ""
-          }
-          ${state.recordNotice ? `<p class="note">${escapeHtml(state.recordNotice)}</p>` : ""}
-        </div>`
-          : ""
+        state.recordNotice ? `<p class="note">${escapeHtml(state.recordNotice)}</p>` : ""
       }
     </section>`
   );
@@ -816,7 +1181,11 @@ function renderRecord(root) {
   }
   const mobImg = root.querySelector(".mob-card.single img");
   if (mobImg) {
-    wireMobImageFallback(mobImg, mob.id, mob.image);
+    if (normalizeMobId(mob.id) === "pufferfish") {
+      startPufferfishImageLoop(mobImg);
+    } else {
+      wireMobImageFallback(mobImg, mob.id, mob.image);
+    }
   }
 
   const micBtn = root.querySelector("#enable-mic");
@@ -828,43 +1197,6 @@ function renderRecord(root) {
   }
 
   wireHoldToRecord(root.querySelector("#record"), item);
-  root.querySelector("#import-raw-first-btn").onclick = () => {
-    root.querySelector("#raw-import-first").click();
-  };
-  root.querySelector("#raw-import-first").onchange = async (ev) => {
-    const file = ev.target.files?.[0];
-    ev.target.value = "";
-    if (!file) return;
-    await importRawRecordingsZip(file, { goToExport: true });
-  };
-  const toggleAddMobBtn = root.querySelector("#toggle-add-mob");
-  if (toggleAddMobBtn) {
-    toggleAddMobBtn.onclick = () => {
-      state.showAddMobPanel = !state.showAddMobPanel;
-      if (!state.showAddMobPanel) state.addMobInput = "";
-      state.recordNotice = "";
-      render();
-    };
-  }
-  const addMobForm = root.querySelector("#add-mob-form");
-  if (addMobForm) {
-    addMobForm.onsubmit = (ev) => {
-      ev.preventDefault();
-      const selected = [...addMobForm.querySelectorAll('input[name="mob-quick-pick"]:checked')].map(
-        (input) => input.value
-      );
-      addSelectedMobs(selected);
-      state.showAddMobPanel = false;
-      state.addMobInput = "";
-      render();
-    };
-    root.querySelector("#add-all-mobs").onclick = () => {
-      addAllVanillaMobs();
-      state.showAddMobPanel = false;
-      state.addMobInput = "";
-      render();
-    };
-  }
   root.querySelector("#prev").onclick = () => {
     if (state.isRecording) return;
     stopHintAudio();
@@ -874,25 +1206,40 @@ function renderRecord(root) {
   root.querySelector("#next").onclick = () => {
     if (state.isRecording) return;
     stopHintAudio();
-    clip.accepted = true;
-    if (isLastMob) {
-      state.step = 1;
-    } else {
-      state.recordIndex = Math.min(state.mobs.length - 1, state.recordIndex + 1);
+    if (!clip.accepted) {
+      if (!canAccept) return;
+      clip.accepted = true;
+      if (!clip.pointsAwarded) {
+        state.score += ACCEPT_POINTS;
+        clip.pointsAwarded = true;
+      }
     }
+    advanceToNextMob();
     render();
   };
+  const retryBtn = root.querySelector("#retry-take");
+  if (retryBtn) {
+    retryBtn.onclick = () => {
+      if (!canRetry) return;
+      state.score -= RETRY_PENALTY;
+      clip.accepted = false;
+      if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
+      clip.recording = null;
+      clip.seconds = 0;
+      render();
+    };
+  }
   const basicSkipBtn = root.querySelector("#skip-circle");
   if (basicSkipBtn) {
     basicSkipBtn.onclick = () => {
       if (state.isRecording || clip.converting) return;
       stopHintAudio();
+      state.score -= SKIP_PENALTY;
+      if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
+      clip.recording = null;
+      clip.seconds = 0;
       clip.accepted = true;
-      if (isLastMob) {
-        state.step = 1;
-      } else {
-        state.recordIndex = Math.min(state.mobs.length - 1, state.recordIndex + 1);
-      }
+      advanceToNextMob();
       render();
     };
   }
@@ -915,51 +1262,107 @@ function renderExport(root) {
   }).length;
   const logText = state.exportLogs.join("\n") || state.exportLog;
   const showLogOpen = /failed|error/i.test(`${state.busyMsg} ${state.exportLog}`);
-  const isReady = missing === 0;
-  const headline = isReady ? "Your Voice Pack is Ready!" : "Your Voice Pack Needs Attention";
+  const reveal2 = state.revealPhase >= 2;
+  const reveal3 = state.revealPhase >= 3;
+  const currentAnalysisSignature = analysisSignature();
+  if (
+    currentAnalysisSignature !== state.closenessAnalysis.lastSignature &&
+    state.closenessAnalysis.status !== "loading"
+  ) {
+    runClosenessAnalysis(currentAnalysisSignature).catch((err) => {
+      console.error(err);
+    });
+  }
+  const closeness = state.closenessAnalysis;
+  const scoredRows = closeness.results.filter((row) => row.status === "scored");
+  const chartRows = closeness.results.map((row, idx) => {
+    const pct = row.pct ?? 0;
+    const status = closenessStatusLabel(row.status);
+    const rowClass = row.status === "scored" ? "is-scored" : "is-unscored";
+    const valueText = row.status === "scored" ? `${pct}%` : status;
+    const animDelay = Math.min(idx * 50, 850);
+    return `<div class="closeness-row ${rowClass}">
+      <div class="closeness-row-head">
+        <span>${escapeHtml(row.mobName)}</span>
+        <strong>${escapeHtml(valueText)}</strong>
+      </div>
+      <div class="closeness-bar-track">
+        <span class="closeness-bar-fill" style="--bar-pct:${pct};--bar-delay:${animDelay}ms;"></span>
+      </div>
+    </div>`;
+  });
+  const closenessHeadline =
+    closeness.status === "loading"
+      ? "Analyzing your mob impressions..."
+      : closeness.status === "error"
+        ? "Closeness analysis failed"
+        : closeness.overallPct == null
+          ? "No scored comparisons yet"
+          : `${closeness.overallPct}% Total Closeness`;
+  const closenessSubline =
+    closeness.status === "loading"
+      ? "Comparing wave shape, timing, loudness, and rhythm for each mob."
+      : closeness.status === "error"
+        ? closeness.error || "Try going back, re-recording, and finishing again."
+        : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
 
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-export">
       <div class="export-hero">
-        <div class="ready-badge" aria-hidden="true">&#10003;</div>
-        <h2 class="export-headline">${headline}</h2>
-        <div class="export-pack-card">
-          <h3>Custom Mob Voice Pack</h3>
-          <p class="note">Compatible with Minecraft Java resource packs</p>
+        <div class="ready-badge" aria-hidden="true">🏆</div>
+        <h2 class="export-headline">Challenge Complete</h2>
+        <p class="export-reveal-line ${reveal2 ? "is-visible" : ""}">You didn't just finish a challenge...</p>
+        <p class="export-reveal-line ${reveal3 ? "is-visible" : ""}">You replaced Minecraft.</p>
+        <div class="export-pack-card ${reveal3 ? "is-visible" : ""}">
+          <h3>Your sound drop is ready</h3>
           <div class="export-actions">
-            <button id="build" class="export-primary-btn" ${ready.length ? "" : "disabled"}>Download Resource Pack</button>
-            <button id="guide" class="export-secondary-btn">Installation Guide</button>
-          </div>
-          <div class="export-tertiary-actions">
-            <button id="raw" class="ghost-btn" ${ready.length ? "" : "disabled"}>Download Raw Recordings</button>
-            <button id="import" class="ghost-btn">Import Raw Recordings</button>
-            ${hasAllKnownMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Add a Mob</button>'}
+            <button id="build" class="export-primary-btn" ${ready.length && reveal3 ? "" : "disabled"}>Download My Mob Sound Pack</button>
+            <button id="guide" class="export-secondary-btn">How to install</button>
           </div>
         </div>
-        ${
-          nonOggCount > 0
-            ? `<p class="warn-note">${nonOggCount} clip(s) will be converted to OGG during export (first export may take longer).</p>`
-            : ""
-        }
+        ${nonOggCount > 0 ? `<p class="warn-note">${nonOggCount} clip(s) will be converted to OGG during export.</p>` : ""}
         <div class="export-bottom-row">
-          <button id="restart" class="ghost-btn">Back to Home</button>
+          <button id="restart" class="ghost-btn">Back to Challenge</button>
           <button id="start-over" class="ghost-btn">Start Over</button>
+        </div>
+        <div class="export-tertiary-actions">
+          <button id="import" class="ghost-btn">Import Raw Recordings</button>
+          ${hasAllKnownMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Missing a Mob?</button>'}
         </div>
         <p id="busy" class="note"></p>
       </div>
+      <section class="closeness-panel ${closeness.status === "loading" ? "is-loading" : ""}">
+        <div class="closeness-total">
+          <p class="closeness-kicker">Original vs Your Voice</p>
+          <h3>${escapeHtml(closenessHeadline)}</h3>
+          <p class="note">${escapeHtml(closenessSubline)}</p>
+          <div class="closeness-total-ring" style="--total-pct:${Math.max(0, closeness.overallPct || 0)};">
+            <span>${closeness.overallPct == null ? "--" : `${closeness.overallPct}%`}</span>
+          </div>
+        </div>
+        <div class="closeness-chart">
+          ${chartRows.length ? chartRows.join("") : '<p class="note">No mobs to analyze yet.</p>'}
+        </div>
+      </section>
       <input id="raw-import" type="file" accept=".zip,application/zip" hidden />
       <details class="install-details">
-        <summary>Install Instructions</summary>
+        <summary>How to install</summary>
         <div id="instructions" class="stack"></div>
       </details>
       <details class="log-details">
         <summary>Mob Status (${ready.length} ready${skipped ? ` • ${skipped} skipped` : ""}${missing ? ` • ${missing} missing` : ""})</summary>
         <div class="mob-grid" id="mob-list"></div>
       </details>
-      <details class="log-details" ${showLogOpen ? "open" : ""}>
-        <summary>Technical log (only needed if something breaks)</summary>
-        <pre id="log" class="note log-box"></pre>
+      <details class="log-details advanced-panel" ${showLogOpen ? "open" : ""}>
+        <summary>Advanced</summary>
+        <div class="advanced-actions">
+          <button id="raw" class="ghost-btn" ${ready.length ? "" : "disabled"}>Download Raw Recordings</button>
+        </div>
+        <details class="log-details nested-log-details" ${showLogOpen ? "open" : ""}>
+          <summary>Technical log (only needed if something breaks)</summary>
+          <pre id="log" class="note log-box"></pre>
+        </details>
       </details>
     </section>`
   );
@@ -984,13 +1387,22 @@ function renderExport(root) {
   const addMoreMobsBtn = root.querySelector("#add-more-mobs");
   if (addMoreMobsBtn) {
     addMoreMobsBtn.onclick = () => {
-      state.step = 0;
-      state.showAddMobPanel = true;
-      state.recordNotice = "";
+      const raw = window.prompt("Enter a mob name or id to add (example: zombie_villager):", "");
+      if (!raw || !raw.trim()) return;
+      const before = state.mobs.length;
+      upsertMobFromInput(raw);
+      if (state.mobs.length > before) {
+        state.busyMsg = `${state.recordNotice} Use Back to Challenge to record it.`;
+      } else if (state.recordNotice) {
+        state.busyMsg = state.recordNotice;
+      } else {
+        state.busyMsg = "Could not add that mob.";
+      }
       render();
     };
   }
   root.querySelector("#restart").onclick = () => {
+    clearRevealTimers();
     state.step = 0;
     render();
   };
@@ -1041,7 +1453,7 @@ function renderExport(root) {
   const ins = root.querySelector("#instructions");
   const downloadedLine = state.lastZipName
     ? `<p><strong>Latest download:</strong> <code>${escapeHtml(state.lastZipName)}</code></p>`
-    : `<p>After you click <strong>Download Resource Pack</strong>, move that zip file using the steps below.</p>`;
+    : `<p>After you click <strong>Download My Mob Sound Pack</strong>, move that zip file using the steps below.</p>`;
   ins.innerHTML = `<div class="install-card">
       <h3>Install in Minecraft</h3>
       ${downloadedLine}
@@ -1053,7 +1465,6 @@ function renderExport(root) {
       <p>3. In Minecraft Java: <strong>Options</strong> -> <strong>Resource Packs</strong>, then enable this pack.</p>
     </div>`;
 }
-
 async function ensureMic() {
   if (state.mediaStream) return true;
   try {
@@ -1221,6 +1632,7 @@ async function startRecording(item) {
       blob,
       url: URL.createObjectURL(blob)
     };
+    clip.takes = Math.max(0, clip.takes || 0) + 1;
     clip.accepted = false;
     clip.seconds = blob.size ? (Date.now() - startAt) / 1000 : 0;
     state.isRecording = false;
@@ -1237,6 +1649,7 @@ async function startRecording(item) {
   startMeter();
   startRecordingCountdown(maxMs);
   state.recorder.start();
+  state.hasStartedRecording = true;
   if (!state.holdActive) {
     stopRecording();
     return;
@@ -1270,13 +1683,14 @@ function setRecordingUiActive(isActive) {
   if (recordBtn) {
     recordBtn.classList.toggle("recording", isActive);
     const label = recordBtn.querySelector(".record-pill-label") || recordBtn.querySelector("span");
-    if (label) label.textContent = isActive ? "Release to Stop" : "Hold to Record";
+    if (label) label.textContent = isActive ? "Release to Stop" : "Hold to Imitate";
   }
   const ring = document.querySelector(".countdown-ring");
   if (ring) ring.classList.toggle("active", isActive);
 }
 
 function wireHoldToRecord(button, item) {
+  if (!button) return;
   const startHold = async (ev) => {
     if (ev) ev.preventDefault();
     if (getClipState(item.mob, item.clipKey).converting) return;
@@ -1643,7 +2057,7 @@ async function buildAndDownloadPack() {
     render();
     const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
 
-    const fileName = `${sanitizePackName(PACK_NAME)}.zip`;
+    const fileName = `${sanitizePackName(RESOURCE_PACK_NAME)}.zip`;
     const href = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = href;
@@ -1824,13 +2238,15 @@ async function importRawRecordingsZip(file, options = {}) {
       clip.seconds = seconds;
       clip.accepted = true;
       clip.converting = false;
+      clip.takes = Math.max(clip.takes || 0, 1);
+      clip.pointsAwarded = true;
       imported += 1;
     }
 
     state.busyMsg = `Imported ${imported} recording(s).`;
     logExport(`Import complete: ${imported} recording(s) loaded.`);
     if (goToExport && imported > 0) {
-      state.step = 1;
+      advanceToReveal();
     }
     render();
   } catch (err) {

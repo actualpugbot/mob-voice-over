@@ -4,7 +4,7 @@
   "mobs": {
     "allay": {
       "category": "Allay sounds",
-      "default": "public/assets/mob_sounds/allay/Allay_idle_with_item1.ogg",
+      "default": "public/assets/mob_sounds/allay/Allay_idle_with_item2.ogg",
       "files": [
         "public/assets/mob_sounds/allay/Allay_death1.ogg",
         "public/assets/mob_sounds/allay/Allay_death2.ogg",
@@ -31,7 +31,7 @@
     },
     "armadillo": {
       "category": "Armadillo sounds",
-      "default": "public/assets/mob_sounds/armadillo/Armadillo_ambient1.ogg",
+      "default": "public/assets/mob_sounds/armadillo/Armadillo_roll2.ogg",
       "files": [
         "public/assets/mob_sounds/armadillo/Armadillo_ambient1.ogg",
         "public/assets/mob_sounds/armadillo/Armadillo_ambient2.ogg",
@@ -123,7 +123,7 @@
     },
     "bee": {
       "category": "Bee sounds",
-      "default": "public/assets/mob_sounds/bee/Bee_loop1.ogg",
+      "default": "public/assets/mob_sounds/bee/Bee_loop4.ogg",
       "files": [
         "public/assets/mob_sounds/bee/Bee_aggressive1.ogg",
         "public/assets/mob_sounds/bee/Bee_aggressive2.ogg",
@@ -147,7 +147,7 @@
     },
     "blaze": {
       "category": "Blaze sounds",
-      "default": "public/assets/mob_sounds/blaze/Blaze_idle1.ogg",
+      "default": "public/assets/mob_sounds/blaze/Blaze_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/blaze/Blaze_death.ogg",
         "public/assets/mob_sounds/blaze/Blaze_hurt1.ogg",
@@ -181,7 +181,7 @@
     },
     "breeze": {
       "category": "Breeze sounds",
-      "default": "public/assets/mob_sounds/breeze/Breeze_idle_air1_JE2_BE2.ogg",
+      "default": "public/assets/mob_sounds/breeze/Breeze_idle2_JE2_BE2.ogg",
       "files": [
         "public/assets/mob_sounds/breeze/Breeze_charge1_JE1_BE1.ogg",
         "public/assets/mob_sounds/breeze/Breeze_charge2_JE1_BE1.ogg",
@@ -221,7 +221,7 @@
     },
     "camel": {
       "category": "Camel sounds",
-      "default": "public/assets/mob_sounds/camel/Camel_ambient1.ogg",
+      "default": "public/assets/mob_sounds/camel/Camel_ambient3.ogg",
       "files": [
         "public/assets/mob_sounds/camel/Camel_ambient1.ogg",
         "public/assets/mob_sounds/camel/Camel_ambient2.ogg",
@@ -274,7 +274,7 @@
     },
     "cat": {
       "category": "Cat sounds",
-      "default": "public/assets/mob_sounds/cat/Cat_baby_ambient1.ogg",
+      "default": "public/assets/mob_sounds/cat/Cat_idle4.ogg",
       "files": [
         "public/assets/mob_sounds/cat/Cat_baby_ambient1.ogg",
         "public/assets/mob_sounds/cat/Cat_baby_ambient2.ogg",
@@ -340,7 +340,7 @@
     },
     "chicken": {
       "category": "Chicken sounds",
-      "default": "public/assets/mob_sounds/chicken/Chicken_baby_ambient1.ogg",
+      "default": "public/assets/mob_sounds/chicken/Chicken_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/chicken/Chicken_baby_ambient1.ogg",
         "public/assets/mob_sounds/chicken/Chicken_baby_ambient2.ogg",
@@ -375,7 +375,7 @@
     },
     "cod": {
       "category": "Fallback from pufferfish",
-      "default": "public/assets/mob_sounds/cod/Pufferfish_flop1.ogg",
+      "default": "public/assets/mob_sounds/cod/Pufferfish_flop2.ogg",
       "files": [
         "public/assets/mob_sounds/cod/Pufferfish_blow_out1.ogg",
         "public/assets/mob_sounds/cod/Pufferfish_blow_out2.ogg",
@@ -395,7 +395,7 @@
     },
     "cow": {
       "category": "Cow sounds",
-      "default": "public/assets/mob_sounds/cow/Cow_idle1.ogg",
+      "default": "public/assets/mob_sounds/cow/Cow_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/cow/Cow_hurt1.ogg",
         "public/assets/mob_sounds/cow/Cow_hurt2.ogg",
@@ -476,7 +476,7 @@
     },
     "creeper": {
       "category": "Creeper sounds",
-      "default": "public/assets/mob_sounds/creeper/Creeper_death.ogg",
+      "default": "public/assets/mob_sounds/creeper/Creeper_fuse.ogg",
       "files": [
         "public/assets/mob_sounds/creeper/Creeper_death.ogg",
         "public/assets/mob_sounds/creeper/Creeper_fuse.ogg",
@@ -489,7 +489,7 @@
     },
     "dolphin": {
       "category": "Dolphin sounds",
-      "default": "public/assets/mob_sounds/dolphin/Dolphin_idle1.ogg",
+      "default": "public/assets/mob_sounds/dolphin/Dolphin_idle4.ogg",
       "files": [
         "public/assets/mob_sounds/dolphin/Dolphin_attack1.ogg",
         "public/assets/mob_sounds/dolphin/Dolphin_attack2.ogg",
@@ -536,7 +536,7 @@
     },
     "donkey": {
       "category": "Donkey sounds",
-      "default": "public/assets/mob_sounds/donkey/Donkey_idle1.ogg",
+      "default": "public/assets/mob_sounds/donkey/Donkey_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/donkey/Donkey_angry1.ogg",
         "public/assets/mob_sounds/donkey/Donkey_angry2.ogg",
@@ -551,7 +551,7 @@
     },
     "drowned": {
       "category": "Drowned sounds",
-      "default": "public/assets/mob_sounds/drowned/Drowned_idle1.ogg",
+      "default": "public/assets/mob_sounds/drowned/Drowned_idle4.ogg",
       "files": [
         "public/assets/mob_sounds/drowned/Drowned_death1.ogg",
         "public/assets/mob_sounds/drowned/Drowned_death2.ogg",
@@ -620,7 +620,7 @@
     },
     "ender_dragon": {
       "category": "Ender dragon sounds",
-      "default": "public/assets/mob_sounds/ender_dragon/Ender_dragon_idle1.ogg",
+      "default": "public/assets/mob_sounds/ender_dragon/Ender_dragon_idle4.ogg",
       "files": [
         "public/assets/mob_sounds/ender_dragon/Ender_dragon_death.ogg",
         "public/assets/mob_sounds/ender_dragon/Ender_dragon_flap1.ogg",
@@ -641,7 +641,7 @@
     },
     "enderman": {
       "category": "Enderman sounds",
-      "default": "public/assets/mob_sounds/enderman/Enderman_idle1.ogg",
+      "default": "public/assets/mob_sounds/enderman/Enderman_idle2.ogg",
       "files": [
         "public/assets/mob_sounds/enderman/Enderman_death.ogg",
         "public/assets/mob_sounds/enderman/Enderman_hurt1.ogg",
@@ -662,7 +662,7 @@
     },
     "endermite": {
       "category": "Fallback from silverfish",
-      "default": "public/assets/mob_sounds/endermite/Silverfish_idle1.ogg",
+      "default": "public/assets/mob_sounds/endermite/Silverfish_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/endermite/Silverfish_death.ogg",
         "public/assets/mob_sounds/endermite/Silverfish_hurt1.ogg",
@@ -680,7 +680,7 @@
     },
     "evoker": {
       "category": "Evoker sounds",
-      "default": "public/assets/mob_sounds/evoker/Evoker_idle1.ogg",
+      "default": "public/assets/mob_sounds/evoker/Evoker_idle4.ogg",
       "files": [
         "public/assets/mob_sounds/evoker/Evoker_cast1.ogg",
         "public/assets/mob_sounds/evoker/Evoker_cast2.ogg",
@@ -789,7 +789,7 @@
     },
     "ghast": {
       "category": "Ghast sounds",
-      "default": "public/assets/mob_sounds/ghast/Ghast_idle1.ogg",
+      "default": "public/assets/mob_sounds/ghast/Ghast_idle6.ogg",
       "files": [
         "public/assets/mob_sounds/ghast/Ghast_affectionate_scream.ogg",
         "public/assets/mob_sounds/ghast/Ghast_charge.ogg",
@@ -902,7 +902,7 @@
     },
     "guardian": {
       "category": "Guardian sounds",
-      "default": "public/assets/mob_sounds/guardian/Elder_guardian_idle1.ogg",
+      "default": "public/assets/mob_sounds/guardian/Guardian_land_idle1.ogg",
       "files": [
         "public/assets/mob_sounds/guardian/Curse.ogg",
         "public/assets/mob_sounds/guardian/Elder_guardian_death.ogg",
@@ -941,7 +941,7 @@
     },
     "hoglin": {
       "category": "Hoglin sounds",
-      "default": "public/assets/mob_sounds/hoglin/Hoglin_idle1.ogg",
+      "default": "public/assets/mob_sounds/hoglin/Hoglin_idle2.ogg",
       "files": [
         "public/assets/mob_sounds/hoglin/Hoglin_angry1.ogg",
         "public/assets/mob_sounds/hoglin/Hoglin_angry2.ogg",
@@ -984,7 +984,7 @@
     },
     "horse": {
       "category": "Horse sounds",
-      "default": "public/assets/mob_sounds/horse/Horse_baby_ambient1.ogg",
+      "default": "public/assets/mob_sounds/horse/Horse_idle2.ogg",
       "files": [
         "public/assets/mob_sounds/horse/Horse_angry.ogg",
         "public/assets/mob_sounds/horse/Horse_armor.ogg",
@@ -1052,7 +1052,7 @@
     },
     "husk": {
       "category": "Husk sounds",
-      "default": "public/assets/mob_sounds/husk/Husk_idle1.ogg",
+      "default": "public/assets/mob_sounds/husk/Husk_idle2.ogg",
       "files": [
         "public/assets/mob_sounds/husk/Husk_convert_to_zombie1.ogg",
         "public/assets/mob_sounds/husk/Husk_convert_to_zombie2.ogg",
@@ -1072,7 +1072,7 @@
     },
     "iron_golem": {
       "category": "Iron golem sounds",
-      "default": "public/assets/mob_sounds/iron_golem/Iron_golem_death.ogg",
+      "default": "public/assets/mob_sounds/iron_golem/Iron_golem_hurt1.ogg",
       "files": [
         "public/assets/mob_sounds/iron_golem/Iron_golem_damage1.ogg",
         "public/assets/mob_sounds/iron_golem/Iron_golem_damage2.ogg",
@@ -1119,7 +1119,7 @@
     },
     "magma_cube": {
       "category": "Magma cube sounds",
-      "default": "public/assets/mob_sounds/magma_cube/Magmacube_jump1.ogg",
+      "default": "public/assets/mob_sounds/magma_cube/Magmacube_big3.ogg",
       "files": [
         "public/assets/mob_sounds/magma_cube/Magmacube_big1.ogg",
         "public/assets/mob_sounds/magma_cube/Magmacube_big2.ogg",
@@ -1138,7 +1138,7 @@
     },
     "mooshroom": {
       "category": "Mooshroom sounds",
-      "default": "public/assets/mob_sounds/mooshroom/Mooshroom_eat1.ogg",
+      "default": "public/assets/mob_sounds/cow/Cow_idle1.ogg",
       "files": [
         "public/assets/mob_sounds/mooshroom/Mooshroom_convert1.ogg",
         "public/assets/mob_sounds/mooshroom/Mooshroom_convert2.ogg",
@@ -1153,7 +1153,7 @@
     },
     "mule": {
       "category": "Fallback from donkey",
-      "default": "public/assets/mob_sounds/mule/Donkey_idle1.ogg",
+      "default": "public/assets/mob_sounds/mule/Donkey_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/mule/Donkey_angry1.ogg",
         "public/assets/mob_sounds/mule/Donkey_angry2.ogg",
@@ -1181,7 +1181,7 @@
     },
     "panda": {
       "category": "Panda sounds",
-      "default": "public/assets/mob_sounds/panda/Aggressive_panda_idle1.ogg",
+      "default": "public/assets/mob_sounds/panda/Panda_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/panda/Aggressive_panda_idle1.ogg",
         "public/assets/mob_sounds/panda/Aggressive_panda_idle2.ogg",
@@ -1245,7 +1245,7 @@
     },
     "parrot": {
       "category": "Parrot sounds",
-      "default": "public/assets/mob_sounds/parrot/Parrot_idle1.ogg",
+      "default": "public/assets/mob_sounds/parrot/Parrot_idle2.ogg",
       "files": [
         "public/assets/mob_sounds/parrot/Parrot_death1.ogg",
         "public/assets/mob_sounds/parrot/Parrot_death2.ogg",
@@ -1279,7 +1279,7 @@
     },
     "phantom": {
       "category": "Phantom sounds",
-      "default": "public/assets/mob_sounds/phantom/Phantom_idle1.ogg",
+      "default": "public/assets/mob_sounds/phantom/Phantom_swoop3.ogg",
       "files": [
         "public/assets/mob_sounds/phantom/Phantom_bite1.ogg",
         "public/assets/mob_sounds/phantom/Phantom_bite2.ogg",
@@ -1308,7 +1308,7 @@
     },
     "pig": {
       "category": "Pig sounds",
-      "default": "public/assets/mob_sounds/pig/Pig_baby_ambient1.ogg",
+      "default": "public/assets/mob_sounds/pig/Pig_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/pig/Pig_baby_ambient1.ogg",
         "public/assets/mob_sounds/pig/Pig_baby_ambient2.ogg",
@@ -1369,7 +1369,7 @@
     },
     "piglin": {
       "category": "Piglin sounds",
-      "default": "public/assets/mob_sounds/piglin/Piglin_idle1.ogg",
+      "default": "public/assets/mob_sounds/piglin/Piglin_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/piglin/Piglin_admire1.ogg",
         "public/assets/mob_sounds/piglin/Piglin_admire2.ogg",
@@ -1413,7 +1413,7 @@
     },
     "piglin_brute": {
       "category": "Piglin brute sounds",
-      "default": "public/assets/mob_sounds/piglin_brute/Piglin_brute_idle1.ogg",
+      "default": "public/assets/mob_sounds/piglin_brute/Piglin_brute_angry1.ogg",
       "files": [
         "public/assets/mob_sounds/piglin_brute/Piglin_brute_angry1.ogg",
         "public/assets/mob_sounds/piglin_brute/Piglin_brute_angry2.ogg",
@@ -1465,7 +1465,7 @@
     },
     "polar_bear": {
       "category": "Polar bear sounds",
-      "default": "public/assets/mob_sounds/polar_bear/Baby_polar_bear_idle1.ogg",
+      "default": "public/assets/mob_sounds/polar_bear/Polar_bear_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/polar_bear/Baby_polar_bear_idle1.ogg",
         "public/assets/mob_sounds/polar_bear/Baby_polar_bear_idle2.ogg",
@@ -1493,7 +1493,7 @@
     },
     "pufferfish": {
       "category": "Pufferfish sounds",
-      "default": "public/assets/mob_sounds/pufferfish/Pufferfish_flop1.ogg",
+      "default": "public/assets/mob_sounds/pufferfish/Pufferfish_blow_up2.ogg",
       "files": [
         "public/assets/mob_sounds/pufferfish/Pufferfish_blow_out1.ogg",
         "public/assets/mob_sounds/pufferfish/Pufferfish_blow_out2.ogg",
@@ -1513,7 +1513,7 @@
     },
     "rabbit": {
       "category": "Rabbit sounds",
-      "default": "public/assets/mob_sounds/rabbit/Rabbit_idle1.ogg",
+      "default": "public/assets/mob_sounds/rabbit/Rabbit_hurt3.ogg",
       "files": [
         "public/assets/mob_sounds/rabbit/Rabbit_attack1.ogg",
         "public/assets/mob_sounds/rabbit/Rabbit_attack2.ogg",
@@ -1536,7 +1536,7 @@
     },
     "ravager": {
       "category": "Ravager sounds",
-      "default": "public/assets/mob_sounds/ravager/Ravager_idle1.ogg",
+      "default": "public/assets/mob_sounds/ravager/Ravager_idle2.ogg",
       "files": [
         "public/assets/mob_sounds/ravager/Ravager_bite1.ogg",
         "public/assets/mob_sounds/ravager/Ravager_bite2.ogg",
@@ -1574,7 +1574,7 @@
     },
     "salmon": {
       "category": "Fallback from pufferfish",
-      "default": "public/assets/mob_sounds/salmon/Pufferfish_flop1.ogg",
+      "default": "public/assets/mob_sounds/salmon/Pufferfish_flop4.ogg",
       "files": [
         "public/assets/mob_sounds/salmon/Pufferfish_blow_out1.ogg",
         "public/assets/mob_sounds/salmon/Pufferfish_blow_out2.ogg",
@@ -1594,7 +1594,7 @@
     },
     "sheep": {
       "category": "Sheep sounds",
-      "default": "public/assets/mob_sounds/sheep/Sheep1.ogg",
+      "default": "public/assets/mob_sounds/sheep/Sheep2.ogg",
       "files": [
         "public/assets/mob_sounds/sheep/Sheep_step1.ogg",
         "public/assets/mob_sounds/sheep/Sheep_step2.ogg",
@@ -1608,7 +1608,7 @@
     },
     "shulker": {
       "category": "Shulker sounds",
-      "default": "public/assets/mob_sounds/shulker/Shulker_idle1.ogg",
+      "default": "public/assets/mob_sounds/shulker/Shulker_idle4.ogg",
       "files": [
         "public/assets/mob_sounds/shulker/Shulker_bullet_hit1.ogg",
         "public/assets/mob_sounds/shulker/Shulker_bullet_hit2.ogg",
@@ -1652,7 +1652,7 @@
     },
     "silverfish": {
       "category": "Silverfish sounds",
-      "default": "public/assets/mob_sounds/silverfish/Silverfish_idle1.ogg",
+      "default": "public/assets/mob_sounds/silverfish/Silverfish_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/silverfish/Silverfish_death.ogg",
         "public/assets/mob_sounds/silverfish/Silverfish_hurt1.ogg",
@@ -1718,7 +1718,7 @@
     },
     "slime": {
       "category": "Slime sounds",
-      "default": "public/assets/mob_sounds/slime/Slime_big1.ogg",
+      "default": "public/assets/mob_sounds/slime/Slime_big3.ogg",
       "files": [
         "public/assets/mob_sounds/slime/Slime_attack1.ogg",
         "public/assets/mob_sounds/slime/Slime_attack2.ogg",
@@ -1735,7 +1735,7 @@
     },
     "sniffer": {
       "category": "Sniffer sounds",
-      "default": "public/assets/mob_sounds/sniffer/Sniffer_idle1.ogg",
+      "default": "public/assets/mob_sounds/sniffer/Sniffer_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/sniffer/Sniffer_death1.ogg",
         "public/assets/mob_sounds/sniffer/Sniffer_death2.ogg",
@@ -1814,7 +1814,7 @@
     },
     "squid": {
       "category": "Squid sounds",
-      "default": "public/assets/mob_sounds/squid/Squid_idle1.ogg",
+      "default": "public/assets/mob_sounds/squid/Squid_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/squid/Squid_death1.ogg",
         "public/assets/mob_sounds/squid/Squid_death2.ogg",
@@ -1858,7 +1858,7 @@
     },
     "strider": {
       "category": "Strider sounds",
-      "default": "public/assets/mob_sounds/strider/Strider_idle1.ogg",
+      "default": "public/assets/mob_sounds/strider/Strider_idle2.ogg",
       "files": [
         "public/assets/mob_sounds/strider/Strider_death1.ogg",
         "public/assets/mob_sounds/strider/Strider_death2.ogg",
@@ -1942,7 +1942,7 @@
     },
     "tropical_fish": {
       "category": "Fallback from pufferfish",
-      "default": "public/assets/mob_sounds/tropical_fish/Pufferfish_flop1.ogg",
+      "default": "public/assets/mob_sounds/tropical_fish/Pufferfish_flop2.ogg",
       "files": [
         "public/assets/mob_sounds/tropical_fish/Pufferfish_blow_out1.ogg",
         "public/assets/mob_sounds/tropical_fish/Pufferfish_blow_out2.ogg",
@@ -2013,7 +2013,7 @@
     },
     "vex": {
       "category": "Vex sounds",
-      "default": "public/assets/mob_sounds/vex/Vex_idle1.ogg",
+      "default": "public/assets/mob_sounds/vex/Vex_charge3.ogg",
       "files": [
         "public/assets/mob_sounds/vex/Vex_charge1.ogg",
         "public/assets/mob_sounds/vex/Vex_charge2.ogg",
@@ -2053,7 +2053,7 @@
     },
     "vindicator": {
       "category": "Vindicator sounds",
-      "default": "public/assets/mob_sounds/vindicator/Vindicator_idle1_BE_.ogg",
+      "default": "public/assets/mob_sounds/vindicator/Vindicator_idle1.ogg",
       "files": [
         "public/assets/mob_sounds/vindicator/Vindicator_celebrate1.ogg",
         "public/assets/mob_sounds/vindicator/Vindicator_celebrate2.ogg",
@@ -2074,7 +2074,7 @@
     },
     "wandering_trader": {
       "category": "Wandering trader sounds",
-      "default": "public/assets/mob_sounds/wandering_trader/Wandering_trader_idle1.ogg",
+      "default": "public/assets/mob_sounds/wandering_trader/Wandering_trader_idle4.ogg",
       "files": [
         "public/assets/mob_sounds/wandering_trader/Wandering_trader_accept1.ogg",
         "public/assets/mob_sounds/wandering_trader/Wandering_trader_accept2.ogg",
@@ -2112,7 +2112,7 @@
     },
     "warden": {
       "category": "Warden sounds",
-      "default": "public/assets/mob_sounds/warden/Warden_ambient1.ogg",
+      "default": "public/assets/mob_sounds/warden/Warden_ambient6.ogg",
       "files": [
         "public/assets/mob_sounds/warden/Sonic_boom1.ogg",
         "public/assets/mob_sounds/warden/Sonic_boom2.ogg",
@@ -2264,7 +2264,7 @@
     },
     "wolf": {
       "category": "Wolf sounds",
-      "default": "public/assets/mob_sounds/wolf/Wolf_baby_ambient1.ogg",
+      "default": "public/assets/mob_sounds/wolf/Wolf_idle1.ogg",
       "files": [
         "public/assets/mob_sounds/wolf/Wolf_baby_ambient1.ogg",
         "public/assets/mob_sounds/wolf/Wolf_baby_ambient2.ogg",
@@ -2344,7 +2344,7 @@
     },
     "zombie": {
       "category": "Zombie sounds",
-      "default": "public/assets/mob_sounds/zombie/Zombie_idle1.ogg",
+      "default": "public/assets/mob_sounds/zombie/Zombie_idle3.ogg",
       "files": [
         "public/assets/mob_sounds/zombie/Zombie_breaks_door.ogg",
         "public/assets/mob_sounds/zombie/Zombie_convert_to_drowned1.ogg",
@@ -2390,7 +2390,7 @@
     },
     "zombie_villager": {
       "category": "Zombie villager sounds",
-      "default": "public/assets/mob_sounds/zombie_villager/Zombie_villager_idle1.ogg",
+      "default": "public/assets/mob_sounds/zombie_villager/Zombie_villager_idle2.ogg",
       "files": [
         "public/assets/mob_sounds/zombie_villager/Zombie_villager_death.ogg",
         "public/assets/mob_sounds/zombie_villager/Zombie_villager_hurt1.ogg",
