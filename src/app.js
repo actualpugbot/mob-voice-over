@@ -20,6 +20,7 @@ const DEFAULT_MOB_IMAGE = "public/assets/pack_placeholder.png";
 const DEFAULT_MOB_SET_ID = "basic";
 const BASIC_CLIP_KEY = "__mob_default__";
 const THEME_STORAGE_KEY = "mob_voice_over_theme";
+const HOW_TO_DISMISSED_STORAGE_KEY = "mob_voice_over_how_to_dismissed";
 const DEFAULT_THEME = "light";
 const EXTRA_MOB_IMAGE_EXTENSIONS = Object.freeze({
   camel_husk: "gif",
@@ -354,6 +355,9 @@ const state = {
     results: [],
     error: ""
   },
+  closenessAnimatedSignature: "",
+  showHowToOverlay: false,
+  howToDismissAnimating: false,
   mobImageLoopTimer: null,
   mobImageLoopToken: 0
 };
@@ -378,6 +382,57 @@ function applyTheme(theme) {
   try {
     localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
   } catch {}
+}
+
+function shouldShowHowToOverlay() {
+  try {
+    return localStorage.getItem(HOW_TO_DISMISSED_STORAGE_KEY) !== "1";
+  } catch {
+    return true;
+  }
+}
+
+function dismissHowToOverlay() {
+  state.showHowToOverlay = false;
+  try {
+    localStorage.setItem(HOW_TO_DISMISSED_STORAGE_KEY, "1");
+  } catch {}
+}
+
+function dismissHowToOverlayWithGenie(page) {
+  if (state.howToDismissAnimating) return;
+  const overlay = page?.querySelector(".how-to-overlay");
+  const card = overlay?.querySelector(".how-to-card");
+  const helpBtn = page?.querySelector("#how-to-help-btn");
+  if (!overlay || !card || !helpBtn) {
+    dismissHowToOverlay();
+    render();
+    return;
+  }
+
+  const cardRect = card.getBoundingClientRect();
+  const helpRect = helpBtn.getBoundingClientRect();
+  const translateX = helpRect.left + helpRect.width / 2 - (cardRect.left + cardRect.width / 2);
+  const translateY = helpRect.top + helpRect.height / 2 - (cardRect.top + cardRect.height / 2);
+  const scale = Math.max(0.08, Math.min(helpRect.width / cardRect.width, helpRect.height / cardRect.height));
+
+  state.howToDismissAnimating = true;
+  card.style.setProperty("--genie-tx", `${translateX}px`);
+  card.style.setProperty("--genie-ty", `${translateY}px`);
+  card.style.setProperty("--genie-scale", String(scale));
+  overlay.classList.add("is-dismissing");
+  card.classList.add("is-genie-dismiss");
+
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    state.howToDismissAnimating = false;
+    dismissHowToOverlay();
+    render();
+  };
+  card.addEventListener("animationend", finish, { once: true });
+  window.setTimeout(finish, 520);
 }
 
 function createClipState() {
@@ -950,6 +1005,7 @@ const el = (html) => {
 
 async function boot() {
   applyTheme(loadThemePreference());
+  state.showHowToOverlay = !IS_ADVANCED_PAGE && shouldShowHowToOverlay();
   const [configRes, soundLibraryRes] = await Promise.all([
     fetch("public/mob_config.json"),
     fetch(LOCAL_MOB_SOUND_LIBRARY_PATH).catch(() => null)
@@ -1070,6 +1126,7 @@ function resetWorkflow() {
       results: [],
       error: ""
   };
+  state.closenessAnimatedSignature = "";
   updateCompletedCount();
 }
 
@@ -1251,20 +1308,41 @@ function render() {
         <div class="score-fx-layer" aria-hidden="true">${floatingFx}</div>
       </div>
     </header>
-    <button
-      id="theme-toggle"
-      class="theme-toggle-btn"
-      type="button"
-      aria-pressed="${state.theme === "dark" ? "true" : "false"}"
-      aria-label="${state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}"
-      title="${state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}"
-    >
-      <span class="theme-toggle-icon" aria-hidden="true">
-        <span class="sun-disc"></span>
-        <span class="moon-disc"></span>
-      </span>
-    </button>`
+    <div class="top-right-tools">
+      ${
+        !IS_ADVANCED_PAGE
+          ? `<button
+        id="how-to-help-btn"
+        class="how-to-help-btn"
+        type="button"
+        aria-label="How to play"
+        title="How to play"
+      >?</button>`
+          : ""
+      }
+      <button
+        id="theme-toggle"
+        class="theme-toggle-btn"
+        type="button"
+        aria-pressed="${state.theme === "dark" ? "true" : "false"}"
+        aria-label="${state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}"
+        title="${state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}"
+      >
+        <span class="theme-toggle-icon" aria-hidden="true">
+          <span class="sun-disc"></span>
+          <span class="moon-disc"></span>
+        </span>
+      </button>
+    </div>`
   );
+  const howToHelpBtn = page.querySelector("#how-to-help-btn");
+  if (howToHelpBtn) {
+    howToHelpBtn.onclick = () => {
+      if (state.showHowToOverlay) return;
+      state.showHowToOverlay = true;
+      render();
+    };
+  }
   const themeToggleBtn = page.querySelector("#theme-toggle");
   if (themeToggleBtn) {
     themeToggleBtn.onclick = () => {
@@ -1287,7 +1365,43 @@ function render() {
   }
 
   appendAppFooter(page);
+  if (!IS_ADVANCED_PAGE && state.showHowToOverlay) {
+    page.insertAdjacentHTML(
+      "beforeend",
+      `<section class="how-to-overlay" role="dialog" aria-modal="true" aria-labelledby="how-to-title">
+        <div class="how-to-card">
+          <button id="dismiss-how-to" class="how-to-close-btn" type="button" aria-label="Close help" title="Close help">
+            <svg class="how-to-close-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+              <path d="M4 4 L12 12 M12 4 L4 12"></path>
+            </svg>
+          </button>
+          <h2 id="how-to-title">How to Play:</h2>
+          <ul class="how-to-list">
+            <li>Imitate the mob sound with your voice.</li>
+            <li>We analyze your recordings and score them based on how close they match the original mob sounds.</li>
+            <li>Bonus points if you record without hearing the original mob sound.</li>
+            <li>Bonus points if you do not re-record your mob sound.</li>
+            <li>80% and higher accuracy is legendary.</li>
+          </ul>
+          <button id="start-challenge-cta" class="submit-btn" type="button">Start Challenge!</button>
+        </div>
+      </section>`
+    );
+  }
   app.appendChild(page);
+
+  const startChallengeCta = page.querySelector("#start-challenge-cta");
+  if (startChallengeCta) {
+    startChallengeCta.onclick = () => {
+      dismissHowToOverlayWithGenie(page);
+    };
+  }
+  const dismissHowToBtn = page.querySelector("#dismiss-how-to");
+  if (dismissHowToBtn) {
+    dismissHowToBtn.onclick = () => {
+      dismissHowToOverlayWithGenie(page);
+    };
+  }
 }
 
 function renderRecord(root) {
@@ -1604,31 +1718,40 @@ function renderExport(root) {
       : closeness.overallPct == null
         ? "No scored comparisons yet"
         : `${closeness.overallPct}% Total Closeness`;
+  const shouldAnimateClosenessBars =
+    showResults &&
+    closeness.status === "ready" &&
+    Boolean(closeness.lastSignature) &&
+    state.closenessAnimatedSignature !== closeness.lastSignature;
+  if (shouldAnimateClosenessBars) {
+    state.closenessAnimatedSignature = closeness.lastSignature;
+  }
   const closenessSubline =
     closeness.status === "error"
       ? closeness.error || "Try going back, re-recording, and finishing again."
       : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
   const closenessChartClass = chartRows.length > 10 ? "closeness-chart is-scrollable" : "closeness-chart";
+  const closenessPanelClass = `closeness-panel${shouldAnimateClosenessBars ? "" : " is-static"}`;
 
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-export">
-      <div>
-        ${
-          isAnalyzing
-            ? `<div class="similarity-loading-card">
+      ${
+        isAnalyzing
+          ? `<div>
+        <div class="similarity-loading-card">
           <p class="similarity-loading-title">Calculating Recording Similarities...</p>
           <div class="similarity-loading-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${loadingPct}">
             <span class="similarity-loading-fill" style="--analysis-pct:${loadingPct};"></span>
           </div>
           <p class="note">Compared ${processedForProgress}/${totalForProgress} recordings so far.</p>
-        </div>`
-            : ""
-        }
-      </div>
+        </div>
+      </div>`
+          : ""
+      }
       ${
         showResults
-          ? `<section class="closeness-panel">
+          ? `<section class="${closenessPanelClass}">
         <div class="closeness-total">
           <p class="closeness-kicker">Your Results</p>
           <h3>${escapeHtml(closenessHeadline)}</h3>
