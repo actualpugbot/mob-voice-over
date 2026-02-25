@@ -1608,6 +1608,7 @@ function renderExport(root) {
     closeness.status === "error"
       ? closeness.error || "Try going back, re-recording, and finishing again."
       : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
+  const closenessChartClass = chartRows.length > 10 ? "closeness-chart is-scrollable" : "closeness-chart";
 
   root.insertAdjacentHTML(
     "beforeend",
@@ -1637,7 +1638,7 @@ function renderExport(root) {
           </div>
           <p class="note">Total points: <strong>${Math.round(state.displayedScore)}</strong></p>
         </div>
-        <div class="closeness-chart">
+        <div class="${closenessChartClass}">
           ${chartRows.length ? chartRows.join("") : '<p class="note">No mobs to analyze yet.</p>'}
         </div>
       </section>

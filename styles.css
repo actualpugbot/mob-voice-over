@@ -1093,11 +1093,14 @@ audio {
 }
 
 .closeness-chart {
-  --closeness-visible-rows: 10;
-  --closeness-row-size: 54px;
   display: grid;
   gap: 10px;
   align-content: start;
+}
+
+.closeness-chart.is-scrollable {
+  --closeness-visible-rows: 10;
+  --closeness-row-size: 56px;
   max-height: min(
     70vh,
     calc(
