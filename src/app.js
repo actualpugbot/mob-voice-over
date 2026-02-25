@@ -22,6 +22,7 @@ const BASIC_CLIP_KEY = "__mob_default__";
 const THEME_STORAGE_KEY = "mob_voice_over_theme";
 const HOW_TO_DISMISSED_STORAGE_KEY = "mob_voice_over_how_to_dismissed";
 const DEFAULT_THEME = "light";
+const ACTUALPUG_YOUTUBE_URL = "https://www.youtube.com/@actualpug";
 const EXTRA_MOB_IMAGE_EXTENSIONS = Object.freeze({
   camel_husk: "gif",
   copper_golem: "png",
@@ -1265,9 +1266,27 @@ function progressTargetCount() {
   return Math.max(CHALLENGE_PROGRESS_TARGET, recordItems().length);
 }
 
+function openActualPugChannel() {
+  window.open(ACTUALPUG_YOUTUBE_URL, "_blank", "noopener,noreferrer");
+}
+
+function bindAppFooter(footerEl) {
+  if (!footerEl) return;
+  footerEl.addEventListener("click", openActualPugChannel);
+  footerEl.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    openActualPugChannel();
+  });
+}
+
 function appendAppFooter(root) {
   if (!root) return;
-  root.insertAdjacentHTML("beforeend", '<footer class="app-footer">Made with ❤️ by ActualPug</footer>');
+  root.insertAdjacentHTML(
+    "beforeend",
+    '<footer class="app-footer" role="link" tabindex="0" aria-label="Open ActualPug YouTube channel">Made with ❤️ by ActualPug</footer>'
+  );
+  bindAppFooter(root.querySelector(".app-footer:last-of-type"));
 }
 
 function render() {
@@ -3058,5 +3077,6 @@ boot()
   })
   .catch((err) => {
     console.error(err);
-    app.innerHTML = `<section class="sheet"><p>Failed to load app: ${escapeHtml(String(err.message || err))}</p><footer class="app-footer">Made with ❤️ by ActualPug</footer></section>`;
+    app.innerHTML = `<section class="sheet"><p>Failed to load app: ${escapeHtml(String(err.message || err))}</p><footer class="app-footer" role="link" tabindex="0" aria-label="Open ActualPug YouTube channel">Made with ❤️ by ActualPug</footer></section>`;
+    bindAppFooter(app.querySelector(".app-footer"));
   });

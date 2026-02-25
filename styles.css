@@ -112,6 +112,7 @@ h2 {
   letter-spacing: 0.02em;
   color: var(--muted);
   opacity: 0.75;
+  cursor: pointer;
 }
 
 .how-to-overlay {
