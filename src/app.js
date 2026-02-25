@@ -1,11 +1,13 @@
 const app = document.getElementById("app");
+const IS_ADVANCED_PAGE = /\/advanced\.html$/i.test(window.location.pathname);
+document.body.classList.toggle("advanced-page", IS_ADVANCED_PAGE);
 
 const APP_TITLE = "Mob Impression Challenge";
 const RESOURCE_PACK_NAME = "Mob Voice Over";
 const PACK_DESCRIPTION = "Mob impressions recorded with Mob Impression Challenge";
 const DEFAULT_PACK_FORMAT = 75;
 const STARTING_SCORE = 0;
-const CHALLENGE_PROGRESS_TARGET = 15;
+const CHALLENGE_PROGRESS_TARGET = 10;
 const ACCEPT_POINTS = 200;
 const BLIND_BONUS_POINTS = 150;
 const ORIGINAL_REPLAY_PENALTY = 25;
@@ -313,6 +315,7 @@ const state = {
   hintAudio: null,
   hintPlayingMobId: null,
   hintLoadingMobId: null,
+  recordingClipId: null,
   mobSoundLibrary: null,
   showAddMobPanel: false,
   addMobInput: "",
@@ -473,30 +476,6 @@ function triggerBlindBonusToast() {
 
 function updateCompletedCount() {
   state.completedCount = recordItems().filter((entry) => getClipState(entry.mob, entry.clipKey).accepted).length;
-}
-
-function totalTakeCount() {
-  return recordItems().reduce((sum, entry) => sum + Math.max(0, Number(getClipState(entry.mob, entry.clipKey).takes || 0)), 0);
-}
-
-function challengeSummaryStats() {
-  return recordItems().reduce(
-    (acc, entry) => {
-      const clip = getClipState(entry.mob, entry.clipKey);
-      acc.blindTakes += clip.blindBonusAwarded ? 1 : 0;
-      acc.totalRetries += Math.max(0, Number(clip.retryCount || 0));
-      acc.totalListens += Math.max(0, Number(clip.listenCount || 0));
-      acc.skippedMobs += clip.skipped ? 1 : 0;
-      return acc;
-    },
-    { blindTakes: 0, totalRetries: 0, totalListens: 0, skippedMobs: 0 }
-  );
-}
-
-function scoreTitle(score) {
-  if (score < 1500) return "Villager Noises";
-  if (score <= 3000) return "Mob Whisperer";
-  return "Chaos Overlord";
 }
 
 const toTitleCase = (text) =>
@@ -1029,6 +1008,7 @@ function resetWorkflow() {
   state.exportLogs = [];
   state.lastZipName = "";
   state.hintLoadingMobId = null;
+  state.recordingClipId = null;
   state.showAddMobPanel = false;
   state.addMobInput = "";
   state.recordNotice = "";
@@ -1068,6 +1048,17 @@ function baseMobCount() {
 function appendMobAfterBaseSet(mob) {
   const insertAt = Math.max(baseMobCount(), state.mobs.length);
   state.mobs.splice(insertAt, 0, mob);
+}
+
+function ensureMobInState(rawId, overrides = {}) {
+  const cleanId = normalizeMobId(rawId);
+  if (!cleanId) return null;
+  const existing = state.mobs.find((mob) => mob.id === cleanId);
+  if (existing) return existing;
+  const mobDef = createMobDefinition(cleanId, overrides);
+  const hydrated = hydrateMobEntry(mobDef);
+  appendMobAfterBaseSet(hydrated);
+  return hydrated;
 }
 
 function upsertMobFromInput(rawInput, overrides = {}) {
@@ -1171,13 +1162,19 @@ function packMetaForExport() {
   };
 }
 
+function readyRecordingCount() {
+  return recordItems().filter((entry) => {
+    const clip = getClipState(entry.mob, entry.clipKey);
+    return clip.accepted && clip.recording?.blob;
+  }).length;
+}
+
 function render() {
   stopMobImageLoop();
   updateCompletedCount();
   app.innerHTML = "";
   const page = el(`<section class="sheet"></section>`);
   const progressNow = Math.min(state.completedCount, CHALLENGE_PROGRESS_TARGET);
-  const takesNow = totalTakeCount();
   const scorePulseClass = state.scorePulseType ? `score-value-${state.scorePulseType}` : "";
   const floatingFx = state.scoreFxItems
     .map(
@@ -1194,13 +1191,18 @@ function render() {
     "beforeend",
     `<header class="titlebar">
       <div class="page-hero">
-        <h1>${APP_TITLE}</h1>
-        <p class="subtitle">Can you sound like a game mob?</p>
+        <h1>${IS_ADVANCED_PAGE ? "Advanced Mob Recorder" : APP_TITLE}</h1>
+        <p class="subtitle">${IS_ADVANCED_PAGE ? "Record custom voices for any Minecraft mob." : "Can you sound like a mob?"}</p>
       </div>
       <div class="scoreboard-strip">
-        <p>Progress: <strong>${progressNow} / ${CHALLENGE_PROGRESS_TARGET}</strong></p>
-        <p class="score-value ${scorePulseClass}">Score: <strong>${Math.round(state.displayedScore)}</strong></p>
-        <p>Takes: <strong>${takesNow}</strong></p>
+        <p>${
+          IS_ADVANCED_PAGE
+            ? `Recorded: <strong id="advanced-recorded-count-value">${readyRecordingCount()}</strong>`
+            : `Progress: <strong>${progressNow} / ${CHALLENGE_PROGRESS_TARGET}</strong>`
+        }</p>
+        <p class="score-value ${scorePulseClass}">${
+          IS_ADVANCED_PAGE ? "Mode: <strong>Advanced</strong>" : `Score: <strong>${Math.round(state.displayedScore)}</strong>`
+        }</p>
         <div class="score-fx-layer" aria-hidden="true">${floatingFx}</div>
       </div>
     </header>
@@ -1224,6 +1226,12 @@ function render() {
       applyTheme(state.theme === "dark" ? "light" : "dark");
       render();
     };
+  }
+
+  if (IS_ADVANCED_PAGE) {
+    renderAdvancedPage(page);
+    app.appendChild(page);
+    return;
   }
 
   if (state.step === 0) renderRecord(page);
@@ -1347,7 +1355,6 @@ function renderRecord(root) {
             <button id="next" class="submit-btn" ${canGoNext ? "" : "disabled"}>${nextLabel}</button>
             <button id="skip-circle" class="ghost-btn" ${canSkip ? "" : "disabled"}>Skip (-${SKIP_PENALTY})</button>
           </div>
-          <p class="note challenge-progress-note">Progress: <strong>${done}/${allItems.length}</strong> completed | Mob Takes: <strong>${Math.max(0, Number(clip.takes || 0))}</strong></p>
         </section>
       </div>
       ${
@@ -1441,7 +1448,6 @@ function renderRecord(root) {
   if (basicSkipBtn) {
     basicSkipBtn.onclick = () => {
       if (state.isRecording || clip.converting) return;
-      if (!window.confirm(`Skip this mob? (-${SKIP_PENALTY})`)) return;
       stopHintAudio();
       applyScoreDelta(-SKIP_PENALTY);
       if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
@@ -1460,7 +1466,6 @@ function renderRecord(root) {
 
 function renderExport(root) {
   const items = recordItems();
-  const summary = challengeSummaryStats();
   const ready = items.filter((entry) => {
     const clip = getClipState(entry.mob, entry.clipKey);
     return clip.accepted && clip.recording?.blob;
@@ -1518,23 +1523,11 @@ function renderExport(root) {
     closeness.status === "error"
       ? closeness.error || "Try going back, re-recording, and finishing again."
       : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
-  const finalScore = Math.round(state.score);
-  const title = scoreTitle(finalScore);
 
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-export">
-      <div class="export-hero">
-        <h2 class="export-headline">Mob Voice Challenge!</h2>
-        <section class="run-summary-card">
-          <h3>Run Summary</h3>
-          <p>Final Score: <strong>${finalScore}</strong></p>
-          <p>Title: <strong>${escapeHtml(title)}</strong></p>
-          <p>Blind Takes Count: <strong>${summary.blindTakes}</strong></p>
-          <p>Total Retries: <strong>${summary.totalRetries}</strong></p>
-          <p>Total Listens: <strong>${summary.totalListens}</strong></p>
-          <p>Skipped Mobs: <strong>${summary.skippedMobs}</strong></p>
-        </section>
+      <div>
         ${
           isAnalyzing
             ? `<div class="similarity-loading-card">
@@ -1564,7 +1557,8 @@ function renderExport(root) {
         </div>
       </section>
       <section class="gift-pack-card">
-        <p class="gift-pack-message">Our gift to you! We used your recordings to create a resourcepack for the game!</p>
+        <p class="gift-pack-kicker">Surprise!</p>
+        <p class="gift-pack-message">Our gift to you! We used your recordings to create a resourcepack.</p>
         <div class="export-actions">
           <button id="build" class="export-primary-btn" ${ready.length ? "" : "disabled"}>Download Resource Pack</button>
           <button id="guide" class="export-secondary-btn">How to install</button>
@@ -1573,13 +1567,14 @@ function renderExport(root) {
       </section>`
           : ""
       }
-      <div class="export-hero">
+      <div>
         <div class="export-bottom-row">
           <button id="restart" class="ghost-btn">Back to Challenge</button>
           <button id="start-over" class="ghost-btn">Start Over</button>
         </div>
         <div class="export-tertiary-actions">
           <button id="import" class="ghost-btn">Import Raw Recordings</button>
+          <button id="open-advanced" class="ghost-btn">Advanced Mob Recorder</button>
           ${hasAllKnownMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Missing a Mob?</button>'}
         </div>
         <p id="busy" class="note"></p>
@@ -1629,6 +1624,12 @@ function renderExport(root) {
   root.querySelector("#import").onclick = () => {
     root.querySelector("#raw-import").click();
   };
+  const openAdvancedBtn = root.querySelector("#open-advanced");
+  if (openAdvancedBtn) {
+    openAdvancedBtn.onclick = () => {
+      window.location.href = "advanced.html";
+    };
+  }
   const addMoreMobsBtn = root.querySelector("#add-more-mobs");
   if (addMoreMobsBtn) {
     addMoreMobsBtn.onclick = () => {
@@ -1710,6 +1711,232 @@ function renderExport(root) {
       <p>3. In Minecraft Java: <strong>Options</strong> -> <strong>Resource Packs</strong>, then enable this pack.</p>
     </div>`;
 }
+
+function updateAdvancedRecorderRowUi(row) {
+  if (!row) return;
+  const cleanId = normalizeMobId(row.dataset.mobId || "");
+  const label = row.dataset.mobLabel || toTitleCase(cleanId);
+  const mob = state.mobs.find((item) => normalizeMobId(item.id) === cleanId) || null;
+  const clip = mob ? getClipState(mob, BASIC_CLIP_KEY) : null;
+  const hasRecording = Boolean(clip?.recording?.url);
+  const included = Boolean(clip?.accepted && clip?.recording?.blob);
+  const rowClipId = `${cleanId}::${BASIC_CLIP_KEY}`;
+  const rowIsRecording = state.isRecording && state.recordingClipId === rowClipId;
+  const hintPlaying = state.hintPlayingMobId === cleanId && Boolean(state.hintAudio);
+  const hintLoading = state.hintLoadingMobId === cleanId;
+  const previewing = state.previewClipId === rowClipId && Boolean(state.previewAudio);
+
+  const titleEl = row.querySelector(".advanced-mob-title");
+  if (titleEl) titleEl.textContent = label;
+  const subEl = row.querySelector(".advanced-mob-sub");
+  if (subEl) {
+    subEl.textContent = `${cleanId} • ${included ? "Included" : hasRecording ? "Recorded (not included)" : "No recording"}`;
+  }
+
+  const originalBtn = row.querySelector(".advanced-original-btn");
+  if (originalBtn) {
+    originalBtn.disabled = Boolean(hintLoading);
+    originalBtn.textContent = hintPlaying ? "Stop Original" : "Original";
+  }
+
+  const recordBtn = row.querySelector(".advanced-record-btn");
+  if (recordBtn) {
+    recordBtn.classList.toggle("is-recording", rowIsRecording);
+    recordBtn.disabled = Boolean((state.isRecording && !rowIsRecording) || clip?.converting);
+    recordBtn.textContent = rowIsRecording ? "Stop" : hasRecording ? "Retry" : "Record";
+  }
+
+  const playBtn = row.querySelector(".advanced-play-btn");
+  if (playBtn) {
+    playBtn.disabled = !hasRecording;
+    playBtn.textContent = previewing ? "Stop Mine" : "Play Mine";
+  }
+
+  const includeBtn = row.querySelector(".advanced-include-btn");
+  if (includeBtn) {
+    includeBtn.disabled = !hasRecording;
+    includeBtn.textContent = included ? "Exclude" : "Include";
+  }
+}
+
+function createAdvancedRecorderRow(option) {
+  const cleanId = normalizeMobId(option.id);
+  const row = el(`<article class="advanced-mob-row" data-mob-id="${escapeHtml(cleanId)}" data-mob-label="${escapeHtml(option.label)}">
+    <div class="advanced-mob-main">
+      <p class="advanced-mob-title"></p>
+      <p class="advanced-mob-sub"></p>
+    </div>
+    <div class="advanced-mob-actions">
+      <button class="tiny-btn advanced-original-btn" type="button"></button>
+      <button class="tiny-btn advanced-record-btn" type="button"></button>
+      <button class="tiny-btn advanced-play-btn" type="button"></button>
+      <button class="tiny-btn advanced-include-btn" type="button"></button>
+    </div>
+  </article>`);
+
+  row.querySelector(".advanced-original-btn").onclick = async () => {
+    const targetMob = ensureMobInState(cleanId, { mob: option.label });
+    if (!targetMob) return;
+    await toggleOriginalHintForMob(targetMob);
+  };
+
+  row.querySelector(".advanced-record-btn").onclick = async () => {
+    const targetMob = ensureMobInState(cleanId, { mob: option.label });
+    if (!targetMob) return;
+    const targetClipId = clipIdFor(targetMob, BASIC_CLIP_KEY);
+    if (state.isRecording) {
+      if (state.recordingClipId === targetClipId) {
+        stopRecording();
+        refreshAdvancedPageUi();
+      } else {
+        state.busyMsg = "Finish the current recording first.";
+        refreshAdvancedPageUi();
+      }
+      return;
+    }
+    await startRecording(
+      {
+        mob: targetMob,
+        clipKey: BASIC_CLIP_KEY
+      },
+      { applyScoring: false, autoAccept: true }
+    );
+    refreshAdvancedPageUi();
+  };
+
+  row.querySelector(".advanced-play-btn").onclick = () => {
+    const targetMob = ensureMobInState(cleanId, { mob: option.label });
+    if (!targetMob) return;
+    toggleClipPreview(targetMob, BASIC_CLIP_KEY);
+  };
+
+  row.querySelector(".advanced-include-btn").onclick = () => {
+    const targetMob = ensureMobInState(cleanId, { mob: option.label });
+    if (!targetMob) return;
+    const targetClip = getClipState(targetMob, BASIC_CLIP_KEY);
+    if (!targetClip.recording?.blob) return;
+    targetClip.accepted = !targetClip.accepted;
+    targetClip.skipped = false;
+    targetClip.pointsAwarded = true;
+    updateCompletedCount();
+    refreshAdvancedPageUi();
+  };
+
+  updateAdvancedRecorderRowUi(row);
+  return row;
+}
+
+function renderAdvancedRecorderRows(root, listSelector) {
+  const advancedList = root.querySelector(listSelector);
+  if (!advancedList) return;
+  const allOptions = allMobOptions();
+  advancedList.replaceChildren(...allOptions.map((option) => createAdvancedRecorderRow(option)));
+}
+
+function renderAdvancedPage(root) {
+  const readyCount = readyRecordingCount();
+  const logText = state.exportLogs.join("\n") || state.exportLog;
+
+  root.insertAdjacentHTML(
+    "beforeend",
+    `<section class="panel panel-export">
+      <div>
+        <h2>Advanced Mob Recorder</h2>
+        <p class="note">Choose any mob, hear the original sound, and record your own version.</p>
+        <div class="export-tertiary-actions">
+          <button id="advanced-build" class="export-primary-btn" ${readyCount ? "" : "disabled"}>Download Resource Pack</button>
+          <button id="advanced-import" class="ghost-btn">Import Raw Recordings</button>
+          <button id="advanced-raw" class="ghost-btn" ${readyCount ? "" : "disabled"}>Download Raw Recordings</button>
+          <button id="advanced-reset" class="ghost-btn">Clear Recordings</button>
+          <button id="advanced-back" class="ghost-btn">Back to Main Challenge</button>
+        </div>
+        <p id="advanced-busy" class="note"></p>
+      </div>
+      <input id="advanced-raw-import" type="file" accept=".zip,application/zip" hidden />
+      <section class="log-details advanced-recorder-panel">
+        <div class="advanced-recorder-head">
+          <p class="note">Recordings marked Included are exported into your resource pack.</p>
+        </div>
+        <div class="advanced-mob-list" id="advanced-mob-list"></div>
+      </section>
+      <details class="log-details advanced-panel">
+        <summary>Technical log (only needed if something breaks)</summary>
+        <pre id="advanced-log" class="note log-box"></pre>
+      </details>
+    </section>`
+  );
+
+  const advancedBuildBtn = root.querySelector("#advanced-build");
+  if (advancedBuildBtn) {
+    advancedBuildBtn.onclick = async () => {
+      await buildAndDownloadPack();
+      render();
+    };
+  }
+  root.querySelector("#advanced-import").onclick = () => {
+    root.querySelector("#advanced-raw-import").click();
+  };
+  root.querySelector("#advanced-raw").onclick = async () => {
+    await downloadRawRecordings();
+  };
+  root.querySelector("#advanced-reset").onclick = () => {
+    resetWorkflow();
+    render();
+  };
+  root.querySelector("#advanced-back").onclick = () => {
+    window.location.href = "index.html";
+  };
+  root.querySelector("#advanced-raw-import").onchange = async (ev) => {
+    const file = ev.target.files?.[0];
+    ev.target.value = "";
+    if (!file) return;
+    await importRawRecordingsZip(file, { goToExport: false });
+  };
+
+  root.querySelector("#advanced-busy").textContent = state.busyMsg;
+  root.querySelector("#advanced-log").textContent = logText || "No log output yet.";
+  renderAdvancedRecorderRows(root, "#advanced-mob-list");
+}
+
+function refreshAdvancedPageUi() {
+  if (!IS_ADVANCED_PAGE) {
+    render();
+    return;
+  }
+
+  const advancedList = document.querySelector("#advanced-mob-list");
+  if (!advancedList) {
+    render();
+    return;
+  }
+
+  updateCompletedCount();
+  const readyCount = readyRecordingCount();
+  const recordedCountEl = document.querySelector("#advanced-recorded-count-value");
+  if (recordedCountEl) recordedCountEl.textContent = String(readyCount);
+
+  const advancedBuildBtn = document.querySelector("#advanced-build");
+  if (advancedBuildBtn) advancedBuildBtn.disabled = !readyCount;
+  const advancedRawBtn = document.querySelector("#advanced-raw");
+  if (advancedRawBtn) advancedRawBtn.disabled = !readyCount;
+
+  const busyEl = document.querySelector("#advanced-busy");
+  if (busyEl) busyEl.textContent = state.busyMsg;
+
+  const logText = state.exportLogs.join("\n") || state.exportLog;
+  const logEl = document.querySelector("#advanced-log");
+  if (logEl) logEl.textContent = logText || "No log output yet.";
+
+  const rows = advancedList.querySelectorAll(".advanced-mob-row");
+  const optionCount = allMobOptions().length;
+  if (rows.length !== optionCount) {
+    const scrollTop = advancedList.scrollTop;
+    renderAdvancedRecorderRows(document, "#advanced-mob-list");
+    advancedList.scrollTop = scrollTop;
+    return;
+  }
+  rows.forEach((row) => updateAdvancedRecorderRowUi(row));
+}
 async function ensureMic() {
   if (state.mediaStream) return true;
   try {
@@ -1779,13 +2006,13 @@ async function toggleOriginalHintForMob(mob) {
 
   if (state.hintPlayingMobId === mobId && state.hintAudio) {
     stopHintAudio();
-    render();
+    refreshAdvancedPageUi();
     return;
   }
 
   state.hintLoadingMobId = mobId;
   state.recordNotice = "";
-  render();
+  refreshAdvancedPageUi();
   try {
     const url = await originalSoundUrlForMob(mob);
     if (!url) {
@@ -1799,7 +2026,7 @@ async function toggleOriginalHintForMob(mob) {
     state.hintPlayingMobId = mobId;
     audio.onended = () => {
       stopHintAudio();
-      render();
+      refreshAdvancedPageUi();
     };
     await audio.play();
     const priorPlays = Number(clip.listenCount || 0);
@@ -1818,7 +2045,7 @@ async function toggleOriginalHintForMob(mob) {
     logExport(`Hint playback failed for ${mobId}: ${String(err?.message || err)}`);
   } finally {
     state.hintLoadingMobId = null;
-    render();
+    refreshAdvancedPageUi();
   }
 }
 
@@ -1828,7 +2055,7 @@ function toggleClipPreview(mob, clipKey = BASIC_CLIP_KEY) {
   const currentClipId = clipIdFor(mob, clipKey);
   if (state.previewClipId === currentClipId && state.previewAudio) {
     stopPreviewAudio();
-    render();
+    refreshAdvancedPageUi();
     return;
   }
 
@@ -1839,41 +2066,47 @@ function toggleClipPreview(mob, clipKey = BASIC_CLIP_KEY) {
   audio.onended = () => {
     state.previewAudio = null;
     state.previewClipId = null;
-    render();
+    refreshAdvancedPageUi();
   };
   audio.play().catch((err) => {
     logExport(`Preview playback failed for ${mob.id}/${clipKey}: ${String(err?.message || err)}`);
     stopPreviewAudio();
-    render();
+    refreshAdvancedPageUi();
   });
-  render();
+  refreshAdvancedPageUi();
 }
 
-async function startRecording(item) {
+async function startRecording(item, options = {}) {
   if (state.isRecording) return;
   if (!(await ensureMic())) {
-    render();
+    refreshAdvancedPageUi();
     return;
   }
   const { mob, clipKey } = item;
+  const applyScoring = options.applyScoring !== false;
+  const autoAccept = options.autoAccept === true;
   const clip = getClipState(mob, clipKey);
   const hadPriorRecording = Boolean(clip.recording?.blob);
 
   state.chunks = [];
   state.isRecording = true;
   state.recordingPeak = 0;
+  state.recordingClipId = clipIdFor(mob, clipKey);
   const mimeType = pickMimeType();
   if (!mimeType) {
     state.isRecording = false;
+    state.recordingClipId = null;
     state.busyMsg = "Recording unavailable: browser does not support required audio codecs.";
     logExport("Recording blocked: no supported MediaRecorder codec found.");
-    render();
+    refreshAdvancedPageUi();
     return;
   }
   state.recorder = new MediaRecorder(state.mediaStream, mimeType ? { mimeType } : undefined);
   if (hadPriorRecording) {
     clip.retryCount = Math.max(0, clip.retryCount || 0) + 1;
-    applyScoreDelta(-RETRY_PENALTY);
+    if (applyScoring) {
+      applyScoreDelta(-RETRY_PENALTY);
+    }
   }
   const startAt = Date.now();
   const maxMs = maxRecordingMs(mob);
@@ -1895,8 +2128,9 @@ async function startRecording(item) {
     if (isBlankRecording) {
       state.recordNotice = "No voice was detected, so that recording was not saved.";
       state.isRecording = false;
+      state.recordingClipId = null;
       setRecordingUiActive(false);
-      render();
+      refreshAdvancedPageUi();
       return;
     }
     if (state.previewClipId === clipIdFor(mob, clipKey)) stopPreviewAudio();
@@ -1907,23 +2141,32 @@ async function startRecording(item) {
       url: URL.createObjectURL(blob)
     };
     clip.takes = Math.max(0, clip.takes || 0) + 1;
-    clip.accepted = false;
+    clip.accepted = autoAccept;
     clip.skipped = false;
     clip.seconds = recordedSeconds;
-    clip.hasListened = Number(clip.listenCount || 0) > 0;
-    if (!hadPriorRecording) {
-      clip.blindEligible = !clip.hasListened;
-      clip.riskChipDismissed = true;
-      if (clip.blindEligible && !clip.blindToastShown) {
-        clip.blindToastShown = true;
-        triggerBlindBonusToast();
+    if (applyScoring) {
+      clip.hasListened = Number(clip.listenCount || 0) > 0;
+      if (!hadPriorRecording) {
+        clip.blindEligible = !clip.hasListened;
+        clip.riskChipDismissed = true;
+        if (clip.blindEligible && !clip.blindToastShown) {
+          clip.blindToastShown = true;
+          triggerBlindBonusToast();
+        }
       }
+    } else {
+      clip.hasListened = true;
+      clip.listenCount = Math.max(clip.listenCount || 0, 1);
+      clip.blindEligible = false;
+      clip.blindBonusAwarded = false;
+      clip.pointsAwarded = true;
     }
     updateCompletedCount();
     state.recordNotice = "";
     state.isRecording = false;
+    state.recordingClipId = null;
     setRecordingUiActive(false);
-    render();
+    refreshAdvancedPageUi();
     if (!blob.type.includes("ogg")) {
       convertClipRecordingToOgg(mob, clipKey).catch((err) => {
         console.error(err);
@@ -1943,6 +2186,7 @@ function stopRecording() {
   // Flip state immediately on release so re-renders don't momentarily
   // re-apply the recording style before MediaRecorder.onstop fires.
   state.isRecording = false;
+  state.recordingClipId = null;
   clearRecordingCountdown();
   setRecordingUiActive(false);
   try {
@@ -1988,7 +2232,7 @@ async function convertClipRecordingToOgg(mob, clipKey = BASIC_CLIP_KEY) {
   clip.converting = true;
   state.busyMsg = "Converting recording to OGG...";
   logExport(`Converting ${mob.id}/${clipKey} immediately after recording...`);
-  render();
+  refreshAdvancedPageUi();
 
   try {
     const ogg = await toOgg(clip.recording.blob, `${mob.id}_${clipKey}`);
@@ -2008,7 +2252,7 @@ async function convertClipRecordingToOgg(mob, clipKey = BASIC_CLIP_KEY) {
     throw err;
   } finally {
     clip.converting = false;
-    render();
+    refreshAdvancedPageUi();
   }
 }
 
