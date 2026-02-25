@@ -16,7 +16,7 @@ const RETRY_PENALTY = 50;
 const SKIP_PENALTY = 150;
 const MIN_VALID_RECORDING_SECONDS = 0.2;
 const MIN_VALID_RECORDING_PEAK = 0.02;
-const DEFAULT_MOB_IMAGE = "public/assets/mobs/unknown_mob.png";
+const DEFAULT_MOB_IMAGE = "public/assets/pack_placeholder.png";
 const DEFAULT_MOB_SET_ID = "basic";
 const BASIC_CLIP_KEY = "__mob_default__";
 const THEME_STORAGE_KEY = "mob_voice_over_theme";
@@ -152,6 +152,14 @@ const MOB_SOUND_EVENT_OVERRIDES = Object.freeze({
   ],
   zombie_nautilus: ["entity.zombie_nautilus.ambient", "entity.zombie_nautilus.hurt", "entity.zombie_nautilus.death"]
 });
+const ORIGINAL_SOUND_MOB_FALLBACKS = Object.freeze({
+  camel_husk: ["camel"],
+  copper_golem: ["iron_golem"],
+  happy_ghast: ["ghast"],
+  nautilus: ["squid"],
+  parched: ["husk"],
+  zombie_nautilus: ["drowned"]
+});
 const VANILLA_MOB_IDS = [
   "allay",
   "armadillo",
@@ -235,7 +243,6 @@ const VANILLA_MOB_IDS = [
   "zombie_villager",
   "zombified_piglin"
 ];
-const KNOWN_MOB_IDS = Object.freeze([...new Set([...VANILLA_MOB_IDS, ...EXTRA_MOB_IDS])]);
 const TOTAL_VANILLA_MOBS = VANILLA_MOB_IDS.length;
 const GIF_MOB_IMAGE_IDS = new Set([
   "allay",
@@ -278,6 +285,7 @@ const PUFFERFISH_IMAGE_SEQUENCE = Object.freeze([
 const LOCAL_MOB_SOUND_LIBRARY_PATH = "public/assets/mob_sounds/index.json";
 const originalSoundUrlCache = new Map();
 const originalFeatureCache = new Map();
+let queuedClosenessSignature = "";
 const MIN_ANALYSIS_RMS = 1e-5;
 const ENVELOPE_BINS = 72;
 
@@ -295,6 +303,7 @@ const state = {
   meterPct: 0,
   recordingPeak: 0,
   meterTimer: null,
+  meterSource: null,
   analyser: null,
   audioCtx: null,
   recordCountdownTimer: null,
@@ -572,9 +581,14 @@ async function originalSoundUrlForMob(mob) {
   if (originalSoundUrlCache.has(mobId)) return originalSoundUrlCache.get(mobId);
 
   const library = state.mobSoundLibrary?.mobs || {};
-  const entry = library[mobId];
-  const files = Array.isArray(entry?.files) ? entry.files : [];
-  const url = String(entry?.default || files[0] || "").trim();
+  const candidateMobIds = [mobId, ...(ORIGINAL_SOUND_MOB_FALLBACKS[mobId] || [])];
+  let url = "";
+  for (const candidateMobId of candidateMobIds) {
+    const entry = library[candidateMobId];
+    const files = Array.isArray(entry?.files) ? entry.files : [];
+    url = String(entry?.default || files[0] || "").trim();
+    if (url) break;
+  }
   originalSoundUrlCache.set(mobId, url);
   return url;
 }
@@ -810,6 +824,17 @@ async function runClosenessAnalysis(signature) {
   }
 }
 
+function queueClosenessAnalysis(signature) {
+  if (!signature) return;
+  queuedClosenessSignature = signature;
+  Promise.resolve().then(() => {
+    if (queuedClosenessSignature !== signature) return;
+    queuedClosenessSignature = "";
+    if (state.closenessAnalysis.status === "loading" && state.closenessAnalysis.lastSignature === signature) return;
+    runClosenessAnalysis(signature);
+  });
+}
+
 function closenessStatusLabel(status) {
   if (status === "scored") return "Scored";
   if (status === "skipped") return "Skipped";
@@ -912,22 +937,9 @@ function parseMobInput(rawInput) {
   };
 }
 
-function vanillaMobCoverageCount() {
+function missingMobOptions() {
   const currentIds = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
-  return VANILLA_MOB_IDS.reduce((count, id) => (currentIds.has(id) ? count + 1 : count), 0);
-}
-
-function knownMobCoverageCount() {
-  const currentIds = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
-  return KNOWN_MOB_IDS.reduce((count, id) => (currentIds.has(id) ? count + 1 : count), 0);
-}
-
-function hasAllVanillaMobs() {
-  return vanillaMobCoverageCount() >= TOTAL_VANILLA_MOBS;
-}
-
-function hasAllKnownMobs() {
-  return knownMobCoverageCount() >= KNOWN_MOB_IDS.length;
+  return allMobOptions().filter((option) => !currentIds.has(option.id));
 }
 
 const el = (html) => {
@@ -942,9 +954,29 @@ async function boot() {
     fetch("public/mob_config.json"),
     fetch(LOCAL_MOB_SOUND_LIBRARY_PATH).catch(() => null)
   ]);
+  if (!configRes.ok) {
+    throw new Error(`Failed to load public/mob_config.json (${configRes.status}).`);
+  }
   state.config = await configRes.json();
-  state.mobSoundLibrary = soundLibraryRes && soundLibraryRes.ok ? await soundLibraryRes.json() : null;
+  if (!state.config?.mobSets || typeof state.config.mobSets !== "object") {
+    throw new Error("Invalid mob config: expected top-level mobSets object.");
+  }
+
+  if (soundLibraryRes && soundLibraryRes.ok) {
+    try {
+      state.mobSoundLibrary = await soundLibraryRes.json();
+    } catch {
+      state.mobSoundLibrary = null;
+      logExport("Ignoring invalid local mob sound library JSON.");
+    }
+  } else {
+    state.mobSoundLibrary = null;
+  }
+
   state.mobs = resolveMobSet(DEFAULT_MOB_SET_ID);
+  if (!state.mobs.length) {
+    throw new Error(`Mob set "${DEFAULT_MOB_SET_ID}" is empty or missing in config.`);
+  }
   updateCompletedCount();
   render();
 }
@@ -1102,12 +1134,13 @@ function addSelectedMobs(selectedIds) {
   const normalizedIds = [...new Set(selectedIds.map((id) => normalizeMobId(id)).filter(Boolean))];
   if (!normalizedIds.length) {
     state.recordNotice = "Pick at least one mob from the quick list.";
-    return;
+    return { added: 0, firstAddedId: "" };
   }
 
   const existing = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
   const optionsById = new Map(allMobOptions().map((opt) => [opt.id, opt.label]));
   let added = 0;
+  let firstAddedId = "";
 
   for (let i = 0; i < normalizedIds.length; i += 1) {
     const id = normalizedIds[i];
@@ -1116,6 +1149,7 @@ function addSelectedMobs(selectedIds) {
     appendMobAfterBaseSet(hydrateMobEntry(createMobDefinition(id, { mob: label })));
     existing.add(id);
     added += 1;
+    if (!firstAddedId) firstAddedId = id;
   }
 
   if (added > 0) {
@@ -1123,6 +1157,7 @@ function addSelectedMobs(selectedIds) {
   } else {
     state.recordNotice = "Those mobs are already in your list.";
   }
+  return { added, firstAddedId };
 }
 
 function maxRecordingMs(mob) {
@@ -1169,12 +1204,22 @@ function readyRecordingCount() {
   }).length;
 }
 
+function progressTargetCount() {
+  return Math.max(CHALLENGE_PROGRESS_TARGET, recordItems().length);
+}
+
+function appendAppFooter(root) {
+  if (!root) return;
+  root.insertAdjacentHTML("beforeend", '<footer class="app-footer">Made with ❤️ by ActualPug</footer>');
+}
+
 function render() {
   stopMobImageLoop();
   updateCompletedCount();
   app.innerHTML = "";
   const page = el(`<section class="sheet"></section>`);
-  const progressNow = Math.min(state.completedCount, CHALLENGE_PROGRESS_TARGET);
+  const progressTarget = progressTargetCount();
+  const progressNow = Math.min(state.completedCount, progressTarget);
   const scorePulseClass = state.scorePulseType ? `score-value-${state.scorePulseType}` : "";
   const floatingFx = state.scoreFxItems
     .map(
@@ -1198,7 +1243,7 @@ function render() {
         <p>${
           IS_ADVANCED_PAGE
             ? `Recorded: <strong id="advanced-recorded-count-value">${readyRecordingCount()}</strong>`
-            : `Progress: <strong>${progressNow} / ${CHALLENGE_PROGRESS_TARGET}</strong>`
+            : `Progress: <strong>${progressNow} / ${progressTarget}</strong>`
         }</p>
         <p class="score-value ${scorePulseClass}">${
           IS_ADVANCED_PAGE ? "Mode: <strong>Advanced</strong>" : `Score: <strong>${Math.round(state.displayedScore)}</strong>`
@@ -1230,6 +1275,7 @@ function render() {
 
   if (IS_ADVANCED_PAGE) {
     renderAdvancedPage(page);
+    appendAppFooter(page);
     app.appendChild(page);
     return;
   }
@@ -1240,6 +1286,7 @@ function render() {
     renderExport(page);
   }
 
+  appendAppFooter(page);
   app.appendChild(page);
 }
 
@@ -1361,11 +1408,15 @@ function renderRecord(root) {
         state.micStatus !== "ready"
           ? `<div class="stack">
         <p class="note">${
-          state.micStatus === "denied"
+          state.micStatus === "unsupported"
+            ? "This browser does not support microphone recording for this app. Use a current Chromium-based browser."
+            : state.micStatus === "denied"
             ? "Microphone access is blocked. Enable it in your browser permissions, then retry."
             : "Enable microphone now so you are prompted before recording."
         }</p>
-        <button id="enable-mic" class="ghost-btn" ${state.isRecording ? "disabled" : ""}>Enable Microphone</button>
+        <button id="enable-mic" class="ghost-btn" ${
+          state.isRecording || state.micStatus === "unsupported" ? "disabled" : ""
+        }>Enable Microphone</button>
       </div>`
           : ""
       }
@@ -1470,25 +1521,35 @@ function renderExport(root) {
     const clip = getClipState(entry.mob, entry.clipKey);
     return clip.accepted && clip.recording?.blob;
   });
-  const skipped = items.filter((entry) => {
-    const clip = getClipState(entry.mob, entry.clipKey);
-    return clip.accepted && !clip.recording?.blob;
-  }).length;
-  const missing = items.filter((entry) => !getClipState(entry.mob, entry.clipKey).accepted).length;
   const nonOggCount = ready.filter((entry) => {
     const clip = getClipState(entry.mob, entry.clipKey);
     return !String(clip.recording?.blob?.type || "").includes("ogg");
   }).length;
   const logText = state.exportLogs.join("\n") || state.exportLog;
   const showLogOpen = /failed|error/i.test(`${state.busyMsg} ${state.exportLog}`);
+  const allMobListOptions = allMobOptions();
+  const canShowAddMobToggle = allMobListOptions.length > 0;
+  const existingMobIds = new Set(state.mobs.map((mob) => normalizeMobId(mob.id)));
+  const allMobRows = allMobListOptions
+    .map(
+      (option) => `<label class="mob-check-item" for="add-mob-${escapeHtml(option.id)}">
+        <input
+          id="add-mob-${escapeHtml(option.id)}"
+          type="checkbox"
+          name="add-mob-selection"
+          value="${escapeHtml(option.id)}"
+        />
+        <span>${escapeHtml(option.label)}</span>
+        ${existingMobIds.has(option.id) ? '<small class="note">(already added)</small>' : ""}
+      </label>`
+    )
+    .join("");
   const currentAnalysisSignature = analysisSignature();
   if (
     currentAnalysisSignature !== state.closenessAnalysis.lastSignature &&
     state.closenessAnalysis.status !== "loading"
   ) {
-    runClosenessAnalysis(currentAnalysisSignature).catch((err) => {
-      console.error(err);
-    });
+    queueClosenessAnalysis(currentAnalysisSignature);
   }
   const closeness = state.closenessAnalysis;
   const isAnalyzing = closeness.status === "idle" || closeness.status === "loading";
@@ -1497,19 +1558,43 @@ function renderExport(root) {
   const processedForProgress = Math.max(0, Math.min(totalForProgress, Number(closeness.processedCount || 0)));
   const loadingPct = Math.max(8, Math.min(96, Math.round((processedForProgress / totalForProgress) * 100)));
   const scoredRows = closeness.results.filter((row) => row.status === "scored");
+  const clipByMobId = new Map(
+    state.mobs.map((mob) => {
+      const cleanId = normalizeMobId(mob.id);
+      return [cleanId, { mob, clip: getClipState(mob, BASIC_CLIP_KEY) }];
+    })
+  );
   const chartRows = closeness.results.map((row, idx) => {
     const pct = row.pct ?? 0;
     const status = closenessStatusLabel(row.status);
     const rowClass = row.status === "scored" ? "is-scored" : "is-unscored";
     const valueText = row.status === "scored" ? `${pct}%` : status;
     const animDelay = Math.min(idx * 50, 850);
+    const cleanMobId = normalizeMobId(row.mobId);
+    const clipEntry = clipByMobId.get(cleanMobId) || null;
+    const hasRecording = Boolean(clipEntry?.clip?.recording?.url);
+    const rowClipId = clipEntry ? clipIdFor(clipEntry.mob, BASIC_CLIP_KEY) : `${cleanMobId}::${BASIC_CLIP_KEY}`;
+    const previewing = hasRecording && state.previewClipId === rowClipId && Boolean(state.previewAudio);
+    const playAriaLabel = previewing ? "Stop playback" : `Play ${row.mobName} recording`;
     return `<div class="closeness-row ${rowClass}">
-      <div class="closeness-row-head">
-        <span>${escapeHtml(row.mobName)}</span>
-        <strong>${escapeHtml(valueText)}</strong>
-      </div>
-      <div class="closeness-bar-track">
-        <span class="closeness-bar-fill" style="--bar-pct:${pct};--bar-delay:${animDelay}ms;"></span>
+      <button
+        class="indicator-play-btn closeness-row-play-btn ${previewing ? "is-playing" : ""}"
+        type="button"
+        data-mob-id="${escapeHtml(cleanMobId)}"
+        ${hasRecording ? "" : "disabled"}
+        aria-label="${escapeHtml(playAriaLabel)}"
+        title="${escapeHtml(playAriaLabel)}"
+      >
+        <span class="indicator-play-glyph" aria-hidden="true"></span>
+      </button>
+      <div class="closeness-row-main">
+        <div class="closeness-row-head">
+          <span>${escapeHtml(row.mobName)}</span>
+          <strong>${escapeHtml(valueText)}</strong>
+        </div>
+        <div class="closeness-bar-track">
+          <span class="closeness-bar-fill" style="--bar-pct:${pct};--bar-delay:${animDelay}ms;"></span>
+        </div>
       </div>
     </div>`;
   });
@@ -1558,7 +1643,8 @@ function renderExport(root) {
       </section>
       <section class="gift-pack-card">
         <p class="gift-pack-kicker">Surprise!</p>
-        <p class="gift-pack-message">Our gift to you! We used your recordings to create a resourcepack.</p>
+        <p class="gift-pack-message">My gift to you!<!/p>
+        <p class="gift-pack-message">Here are your mob recordings in a resourcepack. Enjoy!</p>
         <div class="export-actions">
           <button id="build" class="export-primary-btn" ${ready.length ? "" : "disabled"}>Download Resource Pack</button>
           <button id="guide" class="export-secondary-btn">How to install</button>
@@ -1570,13 +1656,25 @@ function renderExport(root) {
       <div>
         <div class="export-bottom-row">
           <button id="restart" class="ghost-btn">Back to Challenge</button>
+          ${canShowAddMobToggle ? '<button id="add-more-mobs" class="ghost-btn">Add More Mobs!</button>' : ""}
           <button id="start-over" class="ghost-btn">Start Over</button>
         </div>
-        <div class="export-tertiary-actions">
-          <button id="import" class="ghost-btn">Import Raw Recordings</button>
-          <button id="open-advanced" class="ghost-btn">Advanced Mob Recorder</button>
-          ${hasAllKnownMobs() ? "" : '<button id="add-more-mobs" class="ghost-btn">Missing a Mob?</button>'}
-        </div>
+        ${
+          state.showAddMobPanel && canShowAddMobToggle
+            ? `<section class="add-mob-form">
+          <label class="mob-check-item mob-check-item-select-all" for="add-mob-select-all">
+            <input id="add-mob-select-all" type="checkbox" />
+            <span>Select all</span>
+          </label>
+          <p class="note">${existingMobIds.size} of ${allMobListOptions.length} known mobs are already in this challenge run.</p>
+          <div class="mob-checklist">${allMobRows || '<p class="note">No mobs available.</p>'}</div>
+          <div class="add-mob-actions">
+            <button id="add-selected-mobs" class="ghost-btn" type="button">Add Selected</button>
+            <button id="close-add-mob-panel" class="ghost-btn" type="button">Done</button>
+          </div>
+        </section>`
+            : ""
+        }
         <p id="busy" class="note"></p>
       </div>
       <input id="raw-import" type="file" accept=".zip,application/zip" hidden />
@@ -1584,14 +1682,12 @@ function renderExport(root) {
         <summary>How to install</summary>
         <div id="instructions" class="stack"></div>
       </details>
-      <details class="log-details">
-        <summary>Mob Status (${ready.length} ready${skipped ? ` • ${skipped} skipped` : ""}${missing ? ` • ${missing} missing` : ""})</summary>
-        <div class="mob-grid" id="mob-list"></div>
-      </details>
       <details class="log-details advanced-panel" ${showLogOpen ? "open" : ""}>
         <summary>Advanced</summary>
         <div class="advanced-actions">
+          <button id="import" class="ghost-btn">Import Raw Recordings</button>
           <button id="raw" class="ghost-btn" ${ready.length ? "" : "disabled"}>Download Raw Recordings</button>
+          <button id="open-advanced" class="ghost-btn">Advanced Mob Recorder</button>
         </div>
         <details class="log-details nested-log-details" ${showLogOpen ? "open" : ""}>
           <summary>Technical log (only needed if something breaks)</summary>
@@ -1630,20 +1726,69 @@ function renderExport(root) {
       window.location.href = "advanced.html";
     };
   }
+  root.querySelectorAll(".closeness-row-play-btn").forEach((playBtn) => {
+    playBtn.onclick = () => {
+      const mobId = normalizeMobId(playBtn.dataset.mobId || "");
+      if (!mobId) return;
+      const targetMob = state.mobs.find((mob) => normalizeMobId(mob.id) === mobId);
+      if (!targetMob) return;
+      toggleClipPreview(targetMob, BASIC_CLIP_KEY);
+    };
+  });
   const addMoreMobsBtn = root.querySelector("#add-more-mobs");
   if (addMoreMobsBtn) {
     addMoreMobsBtn.onclick = () => {
-      const raw = window.prompt("Enter a mob name or id to add (example: zombie_villager):", "");
-      if (!raw || !raw.trim()) return;
+      const shouldOpen = !state.showAddMobPanel;
+      state.showAddMobPanel = shouldOpen;
+      render();
+    };
+  }
+  const addMobSelectAll = root.querySelector("#add-mob-select-all");
+  const addMobSelections = [...root.querySelectorAll('input[name="add-mob-selection"]')];
+  const addSelectedBtn = root.querySelector("#add-selected-mobs");
+  const closeAddPanelBtn = root.querySelector("#close-add-mob-panel");
+  const applyMobNotice = (successSuffix = "") => {
+    if (state.recordNotice) {
+      state.busyMsg = successSuffix ? `${state.recordNotice} ${successSuffix}` : state.recordNotice;
+      return;
+    }
+    state.busyMsg = "Could not add that mob.";
+  };
+  if (addMobSelectAll) {
+    addMobSelectAll.onchange = () => {
+      addMobSelections.forEach((input) => {
+        input.checked = addMobSelectAll.checked;
+      });
+    };
+    const syncSelectAllState = () => {
+      const selectedCount = addMobSelections.filter((input) => input.checked).length;
+      addMobSelectAll.checked = selectedCount > 0 && selectedCount === addMobSelections.length;
+      addMobSelectAll.indeterminate = selectedCount > 0 && selectedCount < addMobSelections.length;
+    };
+    addMobSelections.forEach((input) => {
+      input.onchange = syncSelectAllState;
+    });
+    syncSelectAllState();
+  }
+  if (addSelectedBtn) {
+    addSelectedBtn.onclick = () => {
+      const selectedIds = addMobSelections.filter((input) => input.checked).map((input) => input.value);
       const before = state.mobs.length;
-      upsertMobFromInput(raw);
-      if (state.mobs.length > before) {
-        state.busyMsg = `${state.recordNotice} Use Back to Challenge to record it.`;
-      } else if (state.recordNotice) {
-        state.busyMsg = state.recordNotice;
-      } else {
-        state.busyMsg = "Could not add that mob.";
+      const result = addSelectedMobs(selectedIds);
+      if (result?.added > 0 && result.firstAddedId) {
+        setRecordIndexForMob(result.firstAddedId);
       }
+      if (state.mobs.length > before) {
+        applyMobNotice('Use "Back to Challenge" to record them.');
+      } else {
+        applyMobNotice();
+      }
+      render();
+    };
+  }
+  if (closeAddPanelBtn) {
+    closeAddPanelBtn.onclick = () => {
+      state.showAddMobPanel = false;
       render();
     };
   }
@@ -1665,36 +1810,6 @@ function renderExport(root) {
 
   root.querySelector("#busy").textContent = state.busyMsg;
   root.querySelector("#log").textContent = logText || "No log output yet.";
-
-  const list = root.querySelector("#mob-list");
-  state.mobs.forEach((mob, idx) => {
-    const item = el(`<article class="mob-tile"></article>`);
-    const clip = getClipState(mob, BASIC_CLIP_KEY);
-    const hasMissing = !clip.accepted;
-    const hasSkipped = clip.accepted && !clip.recording?.blob;
-    const playbackClipKey = BASIC_CLIP_KEY;
-    const playbackClip = getClipState(mob, playbackClipKey);
-    const canPlay = Boolean(playbackClip.recording?.url);
-    const isPlaying = state.previewClipId === clipIdFor(mob, playbackClipKey);
-    const status = hasMissing ? "Missing" : hasSkipped ? "Skipped" : "Ready";
-    const statusText = status;
-    const statusClass =
-      status === "Ready" ? "status-ready" : status === "Skipped" ? "status-skipped" : "status-missing";
-    item.innerHTML = `<button class="mob-tile-main" type="button">
-        <span class="mob-tile-name">${escapeHtml(mob.mob)}</span>
-        <span class="mob-tile-status ${statusClass}">${escapeHtml(statusText)}</span>
-      </button>
-      <button class="tiny-btn mob-play-btn" type="button" ${canPlay ? "" : "disabled"}>${isPlaying ? "Stop" : "Play"}</button>`;
-    item.querySelector(".mob-tile-main").onclick = () => {
-      setRecordIndexForMob(state.mobs[idx].id);
-      state.step = 0;
-      render();
-    };
-    item.querySelector(".mob-play-btn").onclick = () => {
-      toggleClipPreview(mob, playbackClipKey);
-    };
-    list.appendChild(item);
-  });
 
   const ins = root.querySelector("#instructions");
   const downloadedLine = state.lastZipName
@@ -1939,6 +2054,10 @@ function refreshAdvancedPageUi() {
 }
 async function ensureMic() {
   if (state.mediaStream) return true;
+  if (!navigator?.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    state.micStatus = "unsupported";
+    return false;
+  }
   try {
     state.mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -2314,11 +2433,12 @@ function updateRecordingIndicator() {
 
 function startMeter() {
   if (!state.mediaStream) return;
+  clearMeter();
   state.audioCtx = state.audioCtx || new AudioContext();
-  const src = state.audioCtx.createMediaStreamSource(state.mediaStream);
+  state.meterSource = state.audioCtx.createMediaStreamSource(state.mediaStream);
   state.analyser = state.audioCtx.createAnalyser();
   state.analyser.fftSize = 2048;
-  src.connect(state.analyser);
+  state.meterSource.connect(state.analyser);
   const data = new Uint8Array(state.analyser.frequencyBinCount);
   state.meterTimer = window.setInterval(() => {
     state.analyser.getByteTimeDomainData(data);
@@ -2340,6 +2460,18 @@ function clearMeter() {
   if (state.meterTimer) {
     clearInterval(state.meterTimer);
     state.meterTimer = null;
+  }
+  if (state.meterSource) {
+    try {
+      state.meterSource.disconnect();
+    } catch {}
+    state.meterSource = null;
+  }
+  if (state.analyser) {
+    try {
+      state.analyser.disconnect();
+    } catch {}
+    state.analyser = null;
   }
   state.meterPct = 0;
   state.recordingPeak = 0;
@@ -2689,7 +2821,7 @@ async function blobDurationSeconds(blob) {
 async function importRawRecordingsZip(file, options = {}) {
   const goToExport = Boolean(options.goToExport);
   try {
-    state.busyMsg = `Importing ${file.name}...`;
+    state.busyMsg = "";
     logExport(`Importing raw recordings from ${file.name}...`);
     render();
 
@@ -2729,7 +2861,6 @@ async function importRawRecordingsZip(file, options = {}) {
     }
 
     if (!candidates.length) {
-      state.busyMsg = "No recordings found in that zip.";
       logExport("Import skipped: no raw recordings found.");
       render();
       return;
@@ -2747,7 +2878,7 @@ async function importRawRecordingsZip(file, options = {}) {
         state.mobs.push(mob);
       }
 
-      state.busyMsg = `Importing ${i + 1}/${candidates.length}: ${c.mobId}`;
+      logExport(`Importing ${i + 1}/${candidates.length}: ${c.mobId}`);
       render();
       const blob = await c.zipEntry.async("blob");
       const typedBlob = blob.type ? blob : new Blob([blob], { type: c.mimeType || "application/octet-stream" });
@@ -2773,7 +2904,6 @@ async function importRawRecordingsZip(file, options = {}) {
       imported += 1;
     }
 
-    state.busyMsg = `Imported ${imported} recording(s).`;
     logExport(`Import complete: ${imported} recording(s) loaded.`);
     updateCompletedCount();
     if (goToExport && imported > 0) {
@@ -2781,7 +2911,7 @@ async function importRawRecordingsZip(file, options = {}) {
     }
     render();
   } catch (err) {
-    state.busyMsg = "Import failed. See log for details.";
+    state.busyMsg = "";
     state.exportLog = String(err?.message || err);
     logExport(`Import failed: ${state.exportLog}`);
     console.error(err);
@@ -2804,5 +2934,5 @@ boot()
   })
   .catch((err) => {
     console.error(err);
-    app.innerHTML = `<section class="sheet"><p>Failed to load app: ${escapeHtml(String(err.message || err))}</p></section>`;
+    app.innerHTML = `<section class="sheet"><p>Failed to load app: ${escapeHtml(String(err.message || err))}</p><footer class="app-footer">Made with ❤️ by ActualPug</footer></section>`;
   });

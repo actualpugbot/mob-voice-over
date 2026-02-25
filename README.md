@@ -1,119 +1,123 @@
 # Mob Voice Over
 
-Browser-based recorder for generating a Minecraft Java resource pack that replaces mob sounds with voice recordings.
+Browser app for recording custom mob voices and exporting them as a Minecraft Java resource pack.
 
-## What This Repo Is
+The project is intentionally build-step-free: plain HTML/CSS + one vanilla JavaScript module.
 
-- Single-page app with no build step.
-- Static assets + vanilla JavaScript module (`src/app.js`).
-- Uses `MediaRecorder` for capture, `@ffmpeg/*` (WASM loaded from CDN) for OGG conversion/mastering, and `JSZip` for zip generation.
+## Features
+
+- Main challenge mode (`index.html`) with scoring and progressive recording flow.
+- Advanced recorder (`advanced.html`) for direct per-mob recording control.
+- Immediate local preview for original clips and user recordings.
+- Automatic OGG conversion/mastering via `ffmpeg.wasm` (loaded on demand).
+- Resource pack export (`pack.mcmeta`, `sounds.json`, and mob voice files).
+- Raw recording import/export zip format for iteration and backup.
+
+## Quick Start
+
+Requirements:
+
+- Python 3 (or any static HTTP server)
+- Modern Chromium-based browser (recommended)
+
+Run locally:
+
+```bash
+python3 -m http.server 8080
+```
+
+Then open:
+
+- Main app: `http://localhost:8080/`
+- Advanced app: `http://localhost:8080/advanced.html`
+
+Do not run from `file://`; config and assets are fetched at runtime.
 
 ## Project Layout
 
 ```text
 .
-├── index.html                    # App entrypoint
-├── styles.css                    # UI styling
-├── src/app.js                    # Main app logic
-├── public/mob_config.json        # Mob/version config (primary data contract)
-├── public/assets/                # Mob images + pack icon
-└── .github/workflows/pages.yml   # GitHub Pages deploy workflow
+├── index.html                      # Main challenge page
+├── advanced.html                   # Advanced recorder page
+├── styles.css                      # Shared styling
+├── src/app.js                      # App logic
+├── public/mob_config.json          # Mob/version data contract
+├── public/assets/                  # Images, sounds, pack icon
+├── scripts/download_mob_sounds.py  # Sound library fetch tool
+└── scripts/validate_repo.py        # Repository/data integrity checks
 ```
 
-Current mob image assets in `public/assets/mobs`:
-- Total files: 117
-- PNG files: 80
-- GIF files: 37
+## Configuration Contract
 
-## Local Development
+`public/mob_config.json` drives mob and version behavior.
 
-Requirements:
-- Modern Chromium-based browser (recommended).
-- Python 3 (or any static file server).
+Top-level keys:
 
-Run:
+- `versionPresets`: list of export format presets
+- `mobSets`: named mob sets (`basic` is the default runtime set)
+
+Each mob entry in a set includes:
+
+- `id`: stable mob id (snake_case)
+- `mob`: display label
+- `image`: image path
+- `lengthHintMs`: authoring hint
+- `styleHints`: free-form hint array
+- `soundEventKeys`: Minecraft sound event keys to override
+
+## Export Behavior
+
+When exporting a pack:
+
+1. Accepted clips are converted to OGG as needed.
+2. Each included mob writes to:
+   `assets/minecraft/sounds/mobvoices/<mob-id>/voice.ogg`
+3. `assets/minecraft/sounds.json` maps each mob’s `soundEventKeys` to that file.
+4. A final zip is downloaded as `Mob_Voice_Over.zip`.
+
+## Raw Recording Zip Format
+
+Raw export file: `MobVoiceOver_raw_recordings.zip`
+
+Expected contents:
+
+- `raw/<mob-id>.ogg`
+- optional `raw/manifest.json` with clip metadata
+
+Import prefers `raw/manifest.json` when present and falls back to scanning `raw/*`.
+
+## Development Checks
+
+Run local validation before pushing changes:
 
 ```bash
-cd ~/dev/mob-voice-over
-python3 -m http.server 8080
+python3 -m py_compile scripts/*.py
+python3 scripts/validate_repo.py
 ```
 
-Open `http://localhost:8080`.
+CI runs the same checks in `.github/workflows/quality.yml`.
 
-Notes:
-- Do not open with `file://`; the app fetches JSON/assets and needs HTTP.
-- First conversion/export may be slow because ffmpeg WASM is loaded on demand from CDN.
+## Deployment
 
-## How The App Works
+GitHub Pages deployment is handled by `.github/workflows/pages.yml`.
 
-1. `src/app.js` loads `public/mob_config.json`.
-2. Record flow:
-   - User holds button to record (`MediaRecorder`).
-   - Recording is previewable and marked accepted via `Next/Done` or `Skip`.
-   - Non-OGG input is converted to OGG immediately after recording.
-3. Export flow:
-   - Builds `pack.mcmeta` from `versionPresets[0]`.
-   - Builds `assets/minecraft/sounds.json` from each mob `soundEventKeys`.
-   - Writes one audio file per mob to `assets/minecraft/sounds/mobvoices/<mob-id>/voice.ogg`.
-   - Downloads final pack zip (`Mob_Voice_Over.zip`).
-
-## Configuration Contract (`public/mob_config.json`)
-
-Top-level fields used by code:
-- `versionPresets[0].packFormat` -> `pack.pack_format`
-- optional `versionPresets[0].supportedFormats.min/max` -> `pack.min_format`, `pack.max_format`, and `pack.supported_formats`
-- app currently resolves `mobSets.basic`
-- each mob entry fields:
-  - `id`
-  - `mob`
-  - `image`
-  - `lengthHintMs` (present for authoring; app currently enforces a fixed 5s max)
-  - `styleHints`
-  - `soundEventKeys` (all mapped to the same recorded clip)
-
-## Raw Recording Import/Export
-
-The app can export/import raw clips to speed iteration:
-- Zip name: `MobVoiceOver_raw_recordings.zip`
-- Contents:
-  - `raw/<mob-id>.ogg`
-  - `raw/manifest.json` with clip metadata
-
-Import behavior:
-- Prefers `raw/manifest.json` when present.
-- Falls back to scanning `raw/*.ext`.
-- Ignores clips whose `mob-id` does not exist in current config.
-
-## Deployment (GitHub Pages)
-
-Workflow is already included at `.github/workflows/pages.yml`.
-
-Publish model:
-- Push to `main` triggers Pages deployment via GitHub Actions.
-- In GitHub repo settings, ensure `Pages -> Source` is set to `GitHub Actions`.
-
-Expected URL:
-- `https://actualpugbot.github.io/mob-voice-over/`
+Pushes to `main` trigger deployment (assuming repository Pages source is set to GitHub Actions).
 
 ## Troubleshooting
 
-- Microphone blocked: enable browser mic permission and retry.
-- Export fails with ffmpeg load errors: confirm network access to jsDelivr/unpkg CDNs and run via local HTTP server (not `file://`).
-- No recordings found on raw import: check zip structure includes `raw/` and filenames like `raw/cow.ogg`.
+- Microphone blocked: enable mic permissions in browser settings.
+- Microphone unsupported: use a browser with `MediaRecorder` + `getUserMedia`.
+- Export conversion failures: verify network access to jsDelivr/unpkg and run via HTTP, not `file://`.
+- Empty raw import: verify `raw/` exists and filenames use mob ids (for example `raw/cow.ogg`).
 
 ## Contributing
 
-Repo Git identity (local):
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-```bash
-git config user.name "actualpug"
-git config user.email "actualpug@gmail.com"
-```
+## License
 
-Recommended flow:
+This repository is licensed under [MIT](LICENSE).
 
-```bash
-git add .
-git commit -m "Describe change"
-git push origin main
-```
+## Third-Party Notices
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency and Minecraft asset notices.
