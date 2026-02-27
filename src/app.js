@@ -16,6 +16,10 @@ const RETRY_PENALTY = 50;
 const SKIP_PENALTY = 150;
 const MIN_VALID_RECORDING_SECONDS = 0.2;
 const MIN_VALID_RECORDING_PEAK = 0.02;
+const DEAD_AIR_THRESHOLD = 0.008;
+const DEAD_AIR_FRAME_SECONDS = 0.01;
+const DEAD_AIR_PADDING_SECONDS = 0.025;
+const DEAD_AIR_MIN_TRIMMED_SECONDS = 0.12;
 const DEFAULT_MOB_IMAGE = "public/assets/pack_placeholder.png";
 const DEFAULT_MOB_SET_ID = "basic";
 const BASIC_CLIP_KEY = "__mob_default__";
@@ -287,6 +291,9 @@ const PUFFERFISH_IMAGE_SEQUENCE = Object.freeze([
 const LOCAL_MOB_SOUND_LIBRARY_PATH = "public/assets/mob_sounds/index.json";
 const originalSoundUrlCache = new Map();
 const originalFeatureCache = new Map();
+const originalWaveformMarkupCache = new Map();
+const originalWaveformLoadingMobIds = new Set();
+const ORIGINAL_WAVEFORM_BAR_COUNT = 96;
 let queuedClosenessSignature = "";
 const MIN_ANALYSIS_RMS = 1e-5;
 const ENVELOPE_BINS = 72;
@@ -323,9 +330,11 @@ const state = {
   lastZipName: "",
   previewAudio: null,
   previewClipId: null,
+  previewWaveformRaf: null,
   hintAudio: null,
   hintPlayingMobId: null,
   hintLoadingMobId: null,
+  hintWaveformRaf: null,
   recordingClipId: null,
   mobSoundLibrary: null,
   showAddMobPanel: false,
@@ -439,6 +448,8 @@ function dismissHowToOverlayWithGenie(page) {
 function createClipState() {
   return {
     recording: null,
+    recordingWaveformMarkup: "",
+    recordingWaveformLoading: false,
     accepted: false,
     skipped: false,
     seconds: 0,
@@ -755,6 +766,140 @@ async function decodeAudioBlob(blob) {
   return analyzeSamples(monoSamplesFromBuffer(buffer), buffer.sampleRate);
 }
 
+function encodeWavFromAudioBuffer(audioBuffer, startFrame = 0, endFrame = audioBuffer.length || 0) {
+  const channels = Math.max(1, Number(audioBuffer.numberOfChannels || 1));
+  const sampleRate = Math.max(1, Number(audioBuffer.sampleRate || 44100));
+  const totalFrames = Math.max(0, Number(audioBuffer.length || 0));
+  const start = Math.max(0, Math.min(totalFrames, Math.floor(startFrame)));
+  const end = Math.max(start, Math.min(totalFrames, Math.floor(endFrame)));
+  const frameCount = end - start;
+  const bytesPerSample = 2;
+  const blockAlign = channels * bytesPerSample;
+  const dataBytes = frameCount * blockAlign;
+  const buf = new ArrayBuffer(44 + dataBytes);
+  const view = new DataView(buf);
+  let offset = 0;
+
+  const writeU8 = (value) => {
+    view.setUint8(offset, value);
+    offset += 1;
+  };
+  const writeU16 = (value) => {
+    view.setUint16(offset, value, true);
+    offset += 2;
+  };
+  const writeU32 = (value) => {
+    view.setUint32(offset, value, true);
+    offset += 4;
+  };
+  const writeAscii = (text) => {
+    for (let i = 0; i < text.length; i += 1) writeU8(text.charCodeAt(i));
+  };
+
+  writeAscii("RIFF");
+  writeU32(36 + dataBytes);
+  writeAscii("WAVE");
+  writeAscii("fmt ");
+  writeU32(16);
+  writeU16(1);
+  writeU16(channels);
+  writeU32(sampleRate);
+  writeU32(sampleRate * blockAlign);
+  writeU16(blockAlign);
+  writeU16(16);
+  writeAscii("data");
+  writeU32(dataBytes);
+
+  const channelData = [];
+  for (let c = 0; c < channels; c += 1) {
+    channelData.push(audioBuffer.getChannelData(c));
+  }
+
+  for (let i = 0; i < frameCount; i += 1) {
+    const sourceIndex = start + i;
+    for (let c = 0; c < channels; c += 1) {
+      const sample = Math.max(-1, Math.min(1, Number(channelData[c][sourceIndex] || 0)));
+      const pcm = sample < 0 ? Math.round(sample * 0x8000) : Math.round(sample * 0x7fff);
+      view.setInt16(offset, pcm, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([buf], { type: "audio/wav" });
+}
+
+async function trimDeadAirFromBlob(blob) {
+  if (!blob?.size) {
+    return { blob, wasTrimmed: false, durationSec: 0, trimmedStartSec: 0, trimmedEndSec: 0 };
+  }
+
+  state.analysisAudioCtx = state.analysisAudioCtx || new AudioContext();
+  const audioBuffer = await state.analysisAudioCtx.decodeAudioData(await blob.arrayBuffer());
+  const samples = monoSamplesFromBuffer(audioBuffer);
+  const sampleRate = Math.max(1, Number(audioBuffer.sampleRate || 44100));
+  const totalFrames = samples.length;
+  const frameSize = Math.max(1, Math.floor(sampleRate * DEAD_AIR_FRAME_SECONDS));
+  const paddingFrames = Math.max(0, Math.floor(sampleRate * DEAD_AIR_PADDING_SECONDS));
+
+  let firstSoundFrame = -1;
+  let lastSoundFrameExclusive = -1;
+  for (let i = 0; i < totalFrames; i += frameSize) {
+    const end = Math.min(totalFrames, i + frameSize);
+    let peak = 0;
+    for (let j = i; j < end; j += 1) {
+      const mag = Math.abs(samples[j]);
+      if (mag > peak) peak = mag;
+    }
+    if (peak >= DEAD_AIR_THRESHOLD) {
+      if (firstSoundFrame < 0) firstSoundFrame = i;
+      lastSoundFrameExclusive = end;
+    }
+  }
+
+  if (firstSoundFrame < 0 || lastSoundFrameExclusive <= firstSoundFrame) {
+    return {
+      blob,
+      wasTrimmed: false,
+      durationSec: totalFrames / sampleRate,
+      trimmedStartSec: 0,
+      trimmedEndSec: 0
+    };
+  }
+
+  const trimStart = Math.max(0, firstSoundFrame - paddingFrames);
+  const trimEnd = Math.min(totalFrames, lastSoundFrameExclusive + paddingFrames);
+  const trimmedDurationSec = (trimEnd - trimStart) / sampleRate;
+  const minDuration = Math.max(MIN_VALID_RECORDING_SECONDS, DEAD_AIR_MIN_TRIMMED_SECONDS);
+
+  if (trimStart <= 0 && trimEnd >= totalFrames) {
+    return {
+      blob,
+      wasTrimmed: false,
+      durationSec: totalFrames / sampleRate,
+      trimmedStartSec: 0,
+      trimmedEndSec: 0
+    };
+  }
+  if (trimmedDurationSec < minDuration) {
+    return {
+      blob,
+      wasTrimmed: false,
+      durationSec: totalFrames / sampleRate,
+      trimmedStartSec: 0,
+      trimmedEndSec: 0
+    };
+  }
+
+  const trimmedBlob = encodeWavFromAudioBuffer(audioBuffer, trimStart, trimEnd);
+  return {
+    blob: trimmedBlob,
+    wasTrimmed: true,
+    durationSec: trimmedDurationSec,
+    trimmedStartSec: trimStart / sampleRate,
+    trimmedEndSec: (totalFrames - trimEnd) / sampleRate
+  };
+}
+
 async function originalFeaturesForMob(mob) {
   const url = await originalSoundUrlForMob(mob);
   if (!url) return null;
@@ -773,6 +918,82 @@ async function originalFeaturesForMob(mob) {
   } catch (err) {
     originalFeatureCache.delete(url);
     throw err;
+  }
+}
+
+function buildWaveformMarkupFromEnvelope(envelope, barCount = ORIGINAL_WAVEFORM_BAR_COUNT) {
+  if (!Array.isArray(envelope) || !envelope.length) return "";
+  const safeBarCount = Math.max(16, Math.min(barCount, 96));
+  const chunkSize = Math.max(1, Math.floor(envelope.length / safeBarCount));
+  const bars = [];
+  let max = 0;
+
+  for (let i = 0; i < safeBarCount; i += 1) {
+    const start = i * chunkSize;
+    if (start >= envelope.length) break;
+    const end = Math.min(envelope.length, start + chunkSize);
+    let sum = 0;
+    for (let j = start; j < end; j += 1) {
+      sum += Number(envelope[j] || 0);
+    }
+    const avg = sum / Math.max(1, end - start);
+    bars.push(avg);
+    if (avg > max) max = avg;
+  }
+
+  if (!bars.length || max <= 0) return "";
+  return bars
+    .map((value) => {
+      const normalized = clamp01(value / max);
+      const pct = Math.max(10, Math.round(normalized * 100));
+      return `<span class="original-wave-bar" style="--bar-h:${pct}%"></span>`;
+    })
+    .join("");
+}
+
+async function ensureOriginalWaveformForMob(mob) {
+  const mobId = normalizeMobId(mob?.id);
+  if (!mobId) return;
+  if (originalWaveformMarkupCache.has(mobId) || originalWaveformLoadingMobIds.has(mobId)) return;
+
+  originalWaveformLoadingMobIds.add(mobId);
+  try {
+    const features = await originalFeaturesForMob(mob);
+    const markup = buildWaveformMarkupFromEnvelope(features?.envelope);
+    originalWaveformMarkupCache.set(mobId, markup);
+  } catch (err) {
+    originalWaveformMarkupCache.set(mobId, "");
+    logExport(`Waveform generation failed for ${mobId}: ${String(err?.message || err)}`);
+  } finally {
+    originalWaveformLoadingMobIds.delete(mobId);
+    const activeMobId = normalizeMobId(state.mobs[state.recordIndex]?.id);
+    if (activeMobId === mobId) refreshAdvancedPageUi();
+  }
+}
+
+async function generateRecordingWaveformForClip(mob, clipKey = BASIC_CLIP_KEY, blobOverride = null) {
+  const clip = getClipState(mob, clipKey);
+  const blob = blobOverride || clip?.recording?.blob;
+  if (!blob) {
+    clip.recordingWaveformMarkup = "";
+    clip.recordingWaveformLoading = false;
+    return;
+  }
+
+  clip.recordingWaveformLoading = true;
+  refreshAdvancedPageUi();
+  try {
+    const features = await decodeAudioBlob(blob);
+    if (clip.recording?.blob !== blob && !blobOverride) return;
+    clip.recordingWaveformMarkup = buildWaveformMarkupFromEnvelope(features?.envelope);
+  } catch (err) {
+    clip.recordingWaveformMarkup = "";
+    logExport(`Recorded waveform generation failed for ${mob.id}/${clipKey}: ${String(err?.message || err)}`);
+  } finally {
+    if (clip.recording?.blob === blob || blobOverride) {
+      clip.recordingWaveformLoading = false;
+      refreshAdvancedPageUi();
+    }
   }
 }
 
@@ -1448,6 +1669,12 @@ function renderRecord(root) {
   const hintMobId = normalizeMobId(mob.id);
   const hintPlaying = state.hintPlayingMobId === hintMobId && Boolean(state.hintAudio);
   const hintLoading = state.hintLoadingMobId === hintMobId;
+  const hintWaveformMarkup = originalWaveformMarkupCache.get(hintMobId) || "";
+  const hintWaveformLoading = originalWaveformLoadingMobIds.has(hintMobId);
+  if (!hintWaveformMarkup && !hintWaveformLoading) {
+    ensureOriginalWaveformForMob(mob).catch(() => {});
+  }
+  const hintProgressPct = Math.round(hintPlaybackProgress() * 1000) / 10;
   const canAccept = Boolean(clip.recording?.url) && !clip.accepted && !state.isRecording && !clip.converting;
   const listenedCount = Number(clip.listenCount || 0);
   const heardOriginal = listenedCount > 0;
@@ -1457,6 +1684,12 @@ function renderRecord(root) {
   const blindChipFading = state.riskChipFadingClipId === item.clipId;
   const canPreviewRecording = Boolean(clip.recording?.url) && !state.isRecording && !clip.converting;
   const isPreviewingRecording = state.previewClipId === item.clipId && Boolean(state.previewAudio);
+  const recordingWaveformMarkup = clip.recordingWaveformMarkup || "";
+  const recordingWaveformLoading = Boolean(clip.recordingWaveformLoading);
+  if (clip.recording?.blob && !recordingWaveformMarkup && !recordingWaveformLoading) {
+    generateRecordingWaveformForClip(mob, clipKey).catch(() => {});
+  }
+  const previewProgressPct = isPreviewingRecording ? Math.round(previewPlaybackProgress() * 1000) / 10 : 0;
   const canGoNext = (clip.accepted || canAccept) && !state.isRecording && !clip.converting;
   const canSkip = !state.isRecording && !clip.converting && !clip.accepted;
   const nextLabel = clip.accepted ? (isLastMob ? "Finish" : "Next") : `Accept (+${ACCEPT_POINTS})`;
@@ -1469,7 +1702,6 @@ function renderRecord(root) {
       : "Hear Original (Free)";
   const recordingMaxMs = state.recordingMaxMs || maxRecordingMs(mob);
   const recordingRemainingMs = state.isRecording ? state.recordingRemainingMs : recordingMaxMs;
-  const recordingProgressPct = Math.round((Math.max(0, recordingRemainingMs) / Math.max(1, recordingMaxMs)) * 100);
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-record panel-record-mock">
@@ -1503,31 +1735,69 @@ function renderRecord(root) {
               }
             </div>
           </div>
-          <div class="recording-indicator ${state.isRecording ? "active" : ""}" aria-live="polite">
-            <div class="recording-indicator-main">
-              <button
-                id="play-my-recording"
-                class="indicator-play-btn ${isPreviewingRecording ? "is-playing" : ""}"
-                type="button"
-                ${canPreviewRecording ? "" : "disabled"}
-                aria-label="${isPreviewingRecording ? "Stop playback" : "Play your recording"}"
-                title="${isPreviewingRecording ? "Stop playback" : "Play your recording"}"
-              >
-                <span class="indicator-play-glyph" aria-hidden="true"></span>
-              </button>
-              <div class="recording-indicator-content">
-                <div class="recording-indicator-row">
-                  <span class="recording-status-dot" aria-hidden="true"></span>
-                  <p class="recording-status-text">${state.isRecording ? "Recording now" : "Ready to record"}</p>
-                  <p class="recording-time-label">
-                    ${state.isRecording ? "Time left" : "Max"}:
-                    <strong class="recording-time-value">${formatSeconds(recordingRemainingMs / 1000)}</strong>
-                  </p>
-                </div>
-                <div class="countdown-ring ${state.isRecording ? "active" : ""}" style="--ring-pct:${recordingProgressPct};">
-                  <span>${formatSeconds(recordingRemainingMs / 1000)}</span>
-                </div>
-              </div>
+          <p class="waveform-label">Original Sound</p>
+          <div class="original-wave-row ${hintPlaying ? "is-playing" : ""}">
+            <button
+              id="play-original-waveform"
+              class="original-wave-play-btn ${hintPlaying ? "is-playing" : ""}"
+              type="button"
+              ${hintLoading ? "disabled" : ""}
+              aria-label="${hintPlaying ? "Pause original sound" : "Play original sound"}"
+              title="${hintPlaying ? "Pause original sound" : "Play original sound"}"
+            >
+              <span class="original-wave-play-glyph" aria-hidden="true"></span>
+            </button>
+            <div
+              class="original-sound-wave ${hintWaveformLoading ? "is-loading" : ""}"
+              style="--hint-progress:${hintProgressPct};"
+              role="progressbar"
+              aria-label="Original sound playback progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="${Math.round(hintProgressPct)}"
+            >
+              ${
+                hintWaveformMarkup
+                  ? `<div class="original-wave-bars">${hintWaveformMarkup}</div>`
+                  : `<p class="original-wave-empty">${hintWaveformLoading ? "Loading waveform..." : "Waveform unavailable"}</p>`
+              }
+              <span class="original-wave-cursor" aria-hidden="true"></span>
+            </div>
+          </div>
+          <p class="waveform-label">Your Recording</p>
+          <div class="recorded-wave-row ${isPreviewingRecording ? "is-playing" : ""}">
+            <button
+              id="play-recorded-waveform"
+              class="recorded-wave-play-btn ${isPreviewingRecording ? "is-playing" : ""}"
+              type="button"
+              ${canPreviewRecording ? "" : "disabled"}
+              aria-label="${isPreviewingRecording ? "Pause your recording" : "Play your recording"}"
+              title="${isPreviewingRecording ? "Pause your recording" : "Play your recording"}"
+            >
+              <span class="recorded-wave-play-glyph" aria-hidden="true"></span>
+            </button>
+            <div
+              class="recorded-sound-wave ${recordingWaveformLoading ? "is-loading" : ""}"
+              data-preview-clip-id="${escapeHtml(item.clipId)}"
+              style="--preview-progress:${previewProgressPct};"
+              role="progressbar"
+              aria-label="Your recording playback progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="${Math.round(previewProgressPct)}"
+            >
+              ${
+                recordingWaveformMarkup
+                  ? `<div class="recorded-wave-bars">${recordingWaveformMarkup}</div>`
+                  : `<p class="recorded-wave-empty">${
+                      recordingWaveformLoading
+                        ? "Loading waveform..."
+                        : clip.recording?.blob
+                        ? "Waveform unavailable"
+                        : "Record your voice to see waveform"
+                    }</p>`
+              }
+              <span class="recorded-wave-cursor" aria-hidden="true"></span>
             </div>
           </div>
           <div class="challenge-primary-controls">
@@ -1561,25 +1831,30 @@ function renderRecord(root) {
   );
 
   const hintBtn = root.querySelector("#play-original-hint");
+  const wavePlayBtn = root.querySelector("#play-original-waveform");
+  const onOriginalToggle = async () => {
+    if (!clip.riskChipDismissed) {
+      clip.riskChipDismissed = true;
+      state.riskChipFadingClipId = item.clipId;
+      render();
+      window.setTimeout(() => {
+        if (state.riskChipFadingClipId === item.clipId) {
+          state.riskChipFadingClipId = "";
+          render();
+        }
+      }, 200);
+    }
+    await toggleOriginalHintForMob(mob);
+  };
   if (hintBtn) {
-    hintBtn.onclick = async () => {
-      if (!clip.riskChipDismissed) {
-        clip.riskChipDismissed = true;
-        state.riskChipFadingClipId = item.clipId;
-        render();
-        window.setTimeout(() => {
-          if (state.riskChipFadingClipId === item.clipId) {
-            state.riskChipFadingClipId = "";
-            render();
-          }
-        }, 200);
-      }
-      await toggleOriginalHintForMob(mob);
-    };
+    hintBtn.onclick = onOriginalToggle;
   }
-  const playbackBtn = root.querySelector("#play-my-recording");
-  if (playbackBtn) {
-    playbackBtn.onclick = () => {
+  if (wavePlayBtn) {
+    wavePlayBtn.onclick = onOriginalToggle;
+  }
+  const recordedWavePlayBtn = root.querySelector("#play-recorded-waveform");
+  if (recordedWavePlayBtn) {
+    recordedWavePlayBtn.onclick = () => {
       toggleClipPreview(mob, clipKey);
     };
   }
@@ -1601,6 +1876,10 @@ function renderRecord(root) {
   }
 
   wireRecordToggle(root.querySelector("#record"), item);
+  if (hintPlaying) startHintWaveformLoop();
+  else updateHintWaveformUi();
+  if (isPreviewingRecording) startPreviewWaveformLoop();
+  else updatePreviewWaveformUi();
   root.querySelector("#prev").onclick = () => {
     if (state.isRecording) return;
     stopHintAudio();
@@ -2248,8 +2527,84 @@ function stopPreviewAudio() {
     state.previewAudio.pause();
     state.previewAudio.currentTime = 0;
   }
+  stopPreviewWaveformLoop();
   state.previewAudio = null;
   state.previewClipId = null;
+}
+
+function previewPlaybackProgress() {
+  if (!state.previewAudio || !state.previewClipId) return 0;
+  const duration = Number(state.previewAudio.duration || 0);
+  const currentTime = Number(state.previewAudio.currentTime || 0);
+  if (!Number.isFinite(duration) || duration <= 0) return 0;
+  return clamp01(currentTime / duration);
+}
+
+function updatePreviewWaveformUi() {
+  const wave = document.querySelector(".recorded-sound-wave");
+  if (!wave) return;
+  const renderedClipId = wave.getAttribute("data-preview-clip-id") || "";
+  const pct = renderedClipId && renderedClipId === state.previewClipId ? Math.round(previewPlaybackProgress() * 1000) / 10 : 0;
+  wave.style.setProperty("--preview-progress", String(pct));
+  wave.setAttribute("aria-valuenow", String(Math.round(pct)));
+}
+
+function stopPreviewWaveformLoop() {
+  if (state.previewWaveformRaf) {
+    cancelAnimationFrame(state.previewWaveformRaf);
+    state.previewWaveformRaf = null;
+  }
+  updatePreviewWaveformUi();
+}
+
+function startPreviewWaveformLoop() {
+  stopPreviewWaveformLoop();
+  const tick = () => {
+    updatePreviewWaveformUi();
+    if (state.previewAudio && !state.previewAudio.paused && state.previewClipId) {
+      state.previewWaveformRaf = requestAnimationFrame(tick);
+      return;
+    }
+    state.previewWaveformRaf = null;
+  };
+  state.previewWaveformRaf = requestAnimationFrame(tick);
+}
+
+function hintPlaybackProgress() {
+  if (!state.hintAudio || !state.hintPlayingMobId) return 0;
+  const duration = Number(state.hintAudio.duration || 0);
+  const currentTime = Number(state.hintAudio.currentTime || 0);
+  if (!Number.isFinite(duration) || duration <= 0) return 0;
+  return clamp01(currentTime / duration);
+}
+
+function updateHintWaveformUi() {
+  const wave = document.querySelector(".original-sound-wave");
+  if (!wave) return;
+  const pct = Math.round(hintPlaybackProgress() * 1000) / 10;
+  wave.style.setProperty("--hint-progress", String(pct));
+  wave.setAttribute("aria-valuenow", String(Math.round(pct)));
+}
+
+function stopHintWaveformLoop() {
+  if (state.hintWaveformRaf) {
+    cancelAnimationFrame(state.hintWaveformRaf);
+    state.hintWaveformRaf = null;
+  }
+  updateHintWaveformUi();
+}
+
+function startHintWaveformLoop() {
+  stopHintWaveformLoop();
+  const tick = () => {
+    updateHintWaveformUi();
+    if (state.hintAudio && !state.hintAudio.paused && state.hintPlayingMobId) {
+      state.hintWaveformRaf = requestAnimationFrame(tick);
+      return;
+    }
+    state.hintWaveformRaf = null;
+  };
+  state.hintWaveformRaf = requestAnimationFrame(tick);
 }
 
 function stopHintAudio() {
@@ -2257,6 +2612,7 @@ function stopHintAudio() {
     state.hintAudio.pause();
     state.hintAudio.currentTime = 0;
   }
+  stopHintWaveformLoop();
   state.hintAudio = null;
   state.hintPlayingMobId = null;
 }
@@ -2286,11 +2642,15 @@ async function toggleOriginalHintForMob(mob) {
     const audio = new Audio(url);
     state.hintAudio = audio;
     state.hintPlayingMobId = mobId;
+    audio.onloadedmetadata = () => {
+      updateHintWaveformUi();
+    };
     audio.onended = () => {
       stopHintAudio();
       refreshAdvancedPageUi();
     };
     await audio.play();
+    startHintWaveformLoop();
     const priorPlays = Number(clip.listenCount || 0);
     clip.listenCount = priorPlays + 1;
     clip.hasListened = true;
@@ -2325,9 +2685,13 @@ function toggleClipPreview(mob, clipKey = BASIC_CLIP_KEY) {
   const audio = new Audio(clip.recording.url);
   state.previewAudio = audio;
   state.previewClipId = currentClipId;
+  audio.onloadedmetadata = () => {
+    updatePreviewWaveformUi();
+  };
   audio.onended = () => {
     state.previewAudio = null;
     state.previewClipId = null;
+    stopPreviewWaveformLoop();
     refreshAdvancedPageUi();
   };
   audio.play().catch((err) => {
@@ -2335,6 +2699,7 @@ function toggleClipPreview(mob, clipKey = BASIC_CLIP_KEY) {
     stopPreviewAudio();
     refreshAdvancedPageUi();
   });
+  startPreviewWaveformLoop();
   refreshAdvancedPageUi();
 }
 
@@ -2379,10 +2744,25 @@ async function startRecording(item, options = {}) {
     if (e.data.size > 0) state.chunks.push(e.data);
   };
 
-  state.recorder.onstop = () => {
-    const blob = new Blob(state.chunks, { type: state.recorder?.mimeType || mimeType || "audio/webm" });
+  state.recorder.onstop = async () => {
+    const rawBlob = new Blob(state.chunks, { type: state.recorder?.mimeType || mimeType || "audio/webm" });
     const recordingPeak = Number(state.recordingPeak || 0);
-    const recordedSeconds = blob.size ? (Date.now() - startAt) / 1000 : 0;
+    let blob = rawBlob;
+    let recordedSeconds = rawBlob.size ? (Date.now() - startAt) / 1000 : 0;
+    if (rawBlob.size) {
+      try {
+        const trimmed = await trimDeadAirFromBlob(rawBlob);
+        if (trimmed?.wasTrimmed && trimmed.blob?.size) {
+          blob = trimmed.blob;
+          recordedSeconds = Number(trimmed.durationSec || recordedSeconds);
+          logExport(
+            `Trimmed dead air for ${mob.id}/${clipKey}: -${trimmed.trimmedStartSec.toFixed(2)}s start, -${trimmed.trimmedEndSec.toFixed(2)}s end.`
+          );
+        }
+      } catch (err) {
+        logExport(`Dead-air trim failed for ${mob.id}/${clipKey}: ${String(err?.message || err)}`);
+      }
+    }
     clearMeter();
     clearRecordingCountdown();
     const isBlankRecording =
@@ -2402,6 +2782,11 @@ async function startRecording(item, options = {}) {
       blob,
       url: URL.createObjectURL(blob)
     };
+    clip.recordingWaveformMarkup = "";
+    clip.recordingWaveformLoading = false;
+    generateRecordingWaveformForClip(mob, clipKey).catch((err) => {
+      console.error(err);
+    });
     clip.takes = Math.max(0, clip.takes || 0) + 1;
     clip.accepted = autoAccept;
     clip.skipped = false;
@@ -2505,6 +2890,11 @@ async function convertClipRecordingToOgg(mob, clipKey = BASIC_CLIP_KEY) {
       blob: ogg,
       url: URL.createObjectURL(ogg)
     };
+    clip.recordingWaveformMarkup = "";
+    clip.recordingWaveformLoading = false;
+    generateRecordingWaveformForClip(mob, clipKey).catch((waveErr) => {
+      console.error(waveErr);
+    });
     state.busyMsg = "";
     logExport(`Conversion complete for ${mob.id}/${clipKey}.`);
   } catch (err) {
@@ -2555,15 +2945,6 @@ function updateRecordingIndicator() {
   const remainingMs = state.isRecording ? state.recordingRemainingMs : maxMs;
   const pct = Math.round((Math.max(0, remainingMs) / Math.max(1, maxMs)) * 100);
   const seconds = formatSeconds(remainingMs / 1000);
-
-  const indicator = document.querySelector(".recording-indicator");
-  if (indicator) indicator.classList.toggle("active", state.isRecording);
-
-  const status = document.querySelector(".recording-status-text");
-  if (status) status.textContent = state.isRecording ? "Recording now" : "Ready to record";
-
-  const timeValue = document.querySelector(".recording-time-value");
-  if (timeValue) timeValue.textContent = seconds;
 
   const ring = document.querySelector(".countdown-ring");
   if (ring) {
@@ -2750,7 +3131,13 @@ async function toOgg(blob, id) {
   const ffmpeg = state.ffmpeg;
   const { fetchFile } = state.ffmpegUtil;
   const safeId = String(id || "clip").replace(/[^a-z0-9_-]/gi, "_");
-  const inputExt = blob.type.includes("webm") ? "webm" : blob.type.includes("mp4") ? "m4a" : "dat";
+  const inputExt = blob.type.includes("webm")
+    ? "webm"
+    : blob.type.includes("mp4")
+      ? "m4a"
+      : blob.type.includes("wav")
+        ? "wav"
+        : "dat";
   const inputFile = `in_${safeId}.${inputExt}`;
   const outputFile = `out_${safeId}.ogg`;
   const masterFilter =
