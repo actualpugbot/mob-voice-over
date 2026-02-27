@@ -366,6 +366,7 @@ const state = {
     error: ""
   },
   closenessAnimatedSignature: "",
+  giftPackRevealDone: false,
   showHowToOverlay: false,
   howToDismissAnimating: false,
   mobImageLoopTimer: null,
@@ -411,7 +412,7 @@ function dismissHowToOverlay() {
 
 function dismissHowToOverlayWithGenie(page) {
   if (state.howToDismissAnimating) return;
-  const overlay = page?.querySelector(".how-to-overlay");
+  const overlay = app?.querySelector(".how-to-overlay");
   const card = overlay?.querySelector(".how-to-card");
   const helpBtn = page?.querySelector("#how-to-help-btn");
   if (!overlay || !card || !helpBtn) {
@@ -1513,6 +1514,9 @@ function appendAppFooter(root) {
 function render() {
   stopMobImageLoop();
   updateCompletedCount();
+  if (state.step !== 1) {
+    state.giftPackRevealDone = false;
+  }
   app.innerHTML = "";
   const page = el(`<section class="sheet"></section>`);
   const progressTarget = progressTargetCount();
@@ -1605,8 +1609,9 @@ function render() {
   }
 
   appendAppFooter(page);
+  app.appendChild(page);
   if (!IS_ADVANCED_PAGE && state.showHowToOverlay) {
-    page.insertAdjacentHTML(
+    app.insertAdjacentHTML(
       "beforeend",
       `<section class="how-to-overlay" role="dialog" aria-modal="true" aria-labelledby="how-to-title">
         <div class="how-to-card">
@@ -1628,15 +1633,14 @@ function render() {
       </section>`
     );
   }
-  app.appendChild(page);
 
-  const startChallengeCta = page.querySelector("#start-challenge-cta");
+  const startChallengeCta = app.querySelector("#start-challenge-cta");
   if (startChallengeCta) {
     startChallengeCta.onclick = () => {
       dismissHowToOverlayWithGenie(page);
     };
   }
-  const dismissHowToBtn = page.querySelector("#dismiss-how-to");
+  const dismissHowToBtn = app.querySelector("#dismiss-how-to");
   if (dismissHowToBtn) {
     dismissHowToBtn.onclick = () => {
       dismissHowToOverlayWithGenie(page);
@@ -1716,25 +1720,6 @@ function renderRecord(root) {
             </figure>
             <p class="challenge-callout">${escapeHtml(mob.mob).toUpperCase()}</p>
           </div>
-          <div class="challenge-actions">
-            <button
-              id="play-original-hint"
-              class="mock-btn mock-btn-green ${hintPlaying ? "playing" : ""}"
-              ${hintLoading ? "disabled" : ""}
-            >${hintBtnLabel}</button>
-            <div class="record-chip-wrap">
-              <button id="record" class="mock-btn mock-btn-blue ${state.isRecording ? "recording" : ""}" ${
-                clip.converting || clip.accepted ? "disabled" : ""
-              }>
-                <span class="record-pill-label">${state.isRecording ? "Stop Recording" : idleRecordButtonLabel(clip)}</span>
-              </button>
-              ${
-                blindBonusAvailable
-                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}">🎯 Risk It: +${BLIND_BONUS_POINTS}</span>`
-                  : ""
-              }
-            </div>
-          </div>
           <p class="waveform-label">Original Sound</p>
           <div class="original-wave-row ${hintPlaying ? "is-playing" : ""}">
             <button
@@ -1798,6 +1783,25 @@ function renderRecord(root) {
                     }</p>`
               }
               <span class="recorded-wave-cursor" aria-hidden="true"></span>
+            </div>
+          </div>
+          <div class="challenge-actions">
+            <button
+              id="play-original-hint"
+              class="mock-btn mock-btn-green ${hintPlaying ? "playing" : ""}"
+              ${hintLoading ? "disabled" : ""}
+            >${hintBtnLabel}</button>
+            <div class="record-chip-wrap">
+              <button id="record" class="mock-btn mock-btn-blue ${state.isRecording ? "recording" : ""}" ${
+                clip.converting || clip.accepted ? "disabled" : ""
+              }>
+                <span class="record-pill-label">${state.isRecording ? "Stop Recording" : idleRecordButtonLabel(clip)}</span>
+              </button>
+              ${
+                blindBonusAvailable
+                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}">🎯 Risk It: +${BLIND_BONUS_POINTS}</span>`
+                  : ""
+              }
             </div>
           </div>
           <div class="challenge-primary-controls">
@@ -2030,6 +2034,13 @@ function renderExport(root) {
       : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
   const closenessChartClass = chartRows.length > 10 ? "closeness-chart is-scrollable" : "closeness-chart";
   const closenessPanelClass = `closeness-panel${shouldAnimateClosenessBars ? "" : " is-static"}`;
+  if (isAnalyzing) {
+    state.giftPackRevealDone = false;
+  }
+  const shouldAnimateGiftPack = showResults && !state.giftPackRevealDone;
+  if (shouldAnimateGiftPack) {
+    state.giftPackRevealDone = true;
+  }
 
   root.insertAdjacentHTML(
     "beforeend",
@@ -2063,9 +2074,9 @@ function renderExport(root) {
           ${chartRows.length ? chartRows.join("") : '<p class="note">No mobs to analyze yet.</p>'}
         </div>
       </section>
-      <section class="gift-pack-card">
+      <section class="gift-pack-card${shouldAnimateGiftPack ? " is-entrance" : ""}">
         <p class="gift-pack-kicker">Surprise!</p>
-        <p class="gift-pack-message">My gift to you!<!/p>
+        <p class="gift-pack-message">My gift to you!</p>
         <p class="gift-pack-message">Here are your mob recordings in a resourcepack. Enjoy!</p>
         <div class="export-actions">
           <button id="build" class="export-primary-btn" ${ready.length ? "" : "disabled"}>Download Resource Pack</button>
