@@ -76,7 +76,15 @@ const MOB_SOUND_EVENT_OVERRIDES = Object.freeze({
     "entity.breeze.death"
   ],
   camel_husk: ["entity.camel_husk.ambient", "entity.camel_husk.hurt", "entity.camel_husk.death"],
-  cat: ["entity.cat.ambient", "entity.cat.purr", "entity.cat.purreow", "entity.cat.hurt", "entity.cat.death"],
+  cat: [
+    "entity.cat.ambient",
+    "entity.cat.stray_ambient",
+    "entity.cat.purr",
+    "entity.cat.purreow",
+    "entity.cat.hiss",
+    "entity.cat.hurt",
+    "entity.cat.death"
+  ],
   copper_golem: ["entity.copper_golem.ambient", "entity.copper_golem.hurt", "entity.copper_golem.death"],
   elder_guardian: [
     "entity.elder_guardian.ambient",
@@ -757,22 +765,35 @@ function resolveSoundEventKeysForMob(mob) {
   return configured;
 }
 
-async function originalSoundUrlForMob(mob) {
+function originalSoundCandidateUrlsForMob(mob) {
   const mobId = normalizeMobId(mob?.id);
-  if (!mobId) return "";
-  if (originalSoundUrlCache.has(mobId)) return originalSoundUrlCache.get(mobId);
+  if (!mobId) return [];
 
   const library = state.mobSoundLibrary?.mobs || {};
   const candidateMobIds = [mobId, ...(ORIGINAL_SOUND_MOB_FALLBACKS[mobId] || [])];
-  let url = "";
+  const urls = [];
   for (const candidateMobId of candidateMobIds) {
     const entry = library[candidateMobId];
-    const files = Array.isArray(entry?.files) ? entry.files : [];
-    url = String(entry?.default || files[0] || "").trim();
-    if (url) break;
+    if (!entry || typeof entry !== "object") continue;
+    const files = Array.isArray(entry.files) ? entry.files : [];
+    [entry.default, ...files].forEach((value) => {
+      const url = String(value || "").trim();
+      if (!url || urls.includes(url)) return;
+      urls.push(url);
+    });
   }
-  originalSoundUrlCache.set(mobId, url);
-  return url;
+  return urls;
+}
+
+function prioritizedOriginalSoundUrlsForMob(mob) {
+  const mobId = normalizeMobId(mob?.id);
+  if (!mobId) return [];
+  const ordered = originalSoundCandidateUrlsForMob(mob);
+  const cached = String(originalSoundUrlCache.get(mobId) || "").trim();
+  if (cached) {
+    return [cached, ...ordered.filter((url) => url !== cached)];
+  }
+  return ordered;
 }
 
 function analysisSignature() {
@@ -1016,24 +1037,38 @@ async function trimDeadAirFromBlob(blob) {
 }
 
 async function originalFeaturesForMob(mob) {
-  const url = await originalSoundUrlForMob(mob);
-  if (!url) return null;
-  if (originalFeatureCache.has(url)) return originalFeatureCache.get(url);
-
-  const featurePromise = (async () => {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Failed to load original audio (${res.status})`);
-    const blob = await res.blob();
-    return decodeAudioBlob(blob);
-  })();
-
-  originalFeatureCache.set(url, featurePromise);
-  try {
-    return await featurePromise;
-  } catch (err) {
-    originalFeatureCache.delete(url);
-    throw err;
+  const mobId = normalizeMobId(mob?.id);
+  if (!mobId) return null;
+  const urls = prioritizedOriginalSoundUrlsForMob(mob);
+  if (!urls.length) {
+    originalSoundUrlCache.set(mobId, "");
+    return null;
   }
+  let lastErr = null;
+
+  for (const url of urls) {
+    let featurePromise = originalFeatureCache.get(url);
+    if (!featurePromise) {
+      featurePromise = (async () => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Failed to load original audio (${res.status})`);
+        const blob = await res.blob();
+        return decodeAudioBlob(blob);
+      })();
+      originalFeatureCache.set(url, featurePromise);
+    }
+
+    try {
+      const features = await featurePromise;
+      originalSoundUrlCache.set(mobId, url);
+      return features;
+    } catch (err) {
+      lastErr = err;
+      originalFeatureCache.delete(url);
+    }
+  }
+
+  throw lastErr || new Error(`Failed to load original audio for ${mobId}`);
 }
 
 function buildWaveformMarkupFromEnvelope(envelope, barCount = ORIGINAL_WAVEFORM_BAR_COUNT) {
@@ -3048,24 +3083,47 @@ async function toggleOriginalHintForMob(mob) {
   state.recordNotice = "";
   refreshAdvancedPageUi();
   try {
-    const url = await originalSoundUrlForMob(mob);
-    if (!url) {
+    const urls = prioritizedOriginalSoundUrlsForMob(mob);
+    if (!urls.length) {
+      originalSoundUrlCache.set(mobId, "");
       state.recordNotice = `No original sound found for ${mob.mob}.`;
       return;
     }
 
-    stopHintAudio();
-    const audio = new Audio(url);
-    state.hintAudio = audio;
-    state.hintPlayingMobId = mobId;
-    audio.onloadedmetadata = () => {
-      updateHintWaveformUi();
-    };
-    audio.onended = () => {
+    let selectedUrl = "";
+    let lastErr = null;
+    for (const url of urls) {
       stopHintAudio();
-      refreshAdvancedPageUi();
-    };
-    await audio.play();
+      const audio = new Audio(url);
+      state.hintAudio = audio;
+      state.hintPlayingMobId = mobId;
+      audio.onloadedmetadata = () => {
+        updateHintWaveformUi();
+      };
+      audio.onended = () => {
+        stopHintAudio();
+        refreshAdvancedPageUi();
+      };
+      try {
+        await audio.play();
+        selectedUrl = url;
+        break;
+      } catch (err) {
+        lastErr = err;
+        audio.onloadedmetadata = null;
+        audio.onended = null;
+        if (state.hintAudio === audio) {
+          state.hintAudio = null;
+          state.hintPlayingMobId = null;
+        }
+      }
+    }
+
+    if (!selectedUrl) {
+      throw lastErr || new Error(`Failed to play original audio for ${mobId}`);
+    }
+
+    originalSoundUrlCache.set(mobId, selectedUrl);
     startHintWaveformLoop();
     const priorPlays = Number(clip.listenCount || 0);
     clip.listenCount = priorPlays + 1;
