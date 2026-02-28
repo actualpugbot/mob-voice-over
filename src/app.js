@@ -10,6 +10,7 @@ const STARTING_SCORE = 0;
 const CHALLENGE_PROGRESS_TARGET = 10;
 const ACCEPT_POINTS = 200;
 const BLIND_BONUS_POINTS = 150;
+const CLOSENESS_POINTS_PER_PERCENT = 2;
 const ORIGINAL_REPLAY_PENALTY = 25;
 const ORIGINAL_REPLAY_PENALTY_CAP = 75;
 const RETRY_PENALTY = 50;
@@ -314,7 +315,9 @@ const CLOSENESS_BAR_START_OFFSET_MS = 90;
 const CLOSENESS_TOTAL_REVEAL_DELAY_MS = 220;
 const CLOSENESS_POINTS_REVEAL_DELAY_MS = 320;
 const CLOSENESS_RING_ANIMATION_MS = 760;
-const GIFT_PACK_REVEAL_BUFFER_MS = 260;
+const CLOSENESS_FINAL_SCORE_REVEAL_MS = 420;
+const GIFT_PACK_REVEAL_AFTER_RESULTS_MS = 2400;
+const CHALLENGE_LEADERBOARD_HIDE_MS = 380;
 
 const state = {
   theme: DEFAULT_THEME,
@@ -402,6 +405,8 @@ const state = {
   showHowToOverlay: false,
   howToDismissAnimating: false,
   showChallengeLeaderboard: true,
+  challengeLeaderboardHiding: false,
+  challengeLeaderboardHideTimer: null,
   mobImageLoopTimer: null,
   mobImageLoopToken: 0
 };
@@ -480,12 +485,23 @@ function dismissHowToOverlayWithGenie(page) {
 }
 
 function hideChallengeLeaderboardPanel() {
-  if (IS_ADVANCED_PAGE || !state.showChallengeLeaderboard) return;
-  state.showChallengeLeaderboard = false;
+  if (IS_ADVANCED_PAGE || !state.showChallengeLeaderboard || state.challengeLeaderboardHiding) return;
+  state.challengeLeaderboardHiding = true;
   const layout = document.querySelector(".challenge-layout.has-leaderboard");
   const panel = document.querySelector("#challenge-leaderboard-panel");
-  if (panel) panel.remove();
-  if (layout) layout.classList.remove("has-leaderboard");
+  if (layout) layout.classList.add("is-leaderboard-hiding");
+  if (panel) panel.classList.add("is-hiding");
+
+  if (state.challengeLeaderboardHideTimer) {
+    clearTimeout(state.challengeLeaderboardHideTimer);
+    state.challengeLeaderboardHideTimer = null;
+  }
+  state.challengeLeaderboardHideTimer = window.setTimeout(() => {
+    state.showChallengeLeaderboard = false;
+    state.challengeLeaderboardHiding = false;
+    state.challengeLeaderboardHideTimer = null;
+    render();
+  }, CHALLENGE_LEADERBOARD_HIDE_MS);
 }
 
 function createClipState() {
@@ -592,6 +608,16 @@ function animateScoreTo(targetScore) {
   };
 
   state.scoreAnimationFrame = requestAnimationFrame(tick);
+}
+
+function syncScoreToTotal(targetScore) {
+  const next = Math.max(0, Number(targetScore || 0));
+  if (!Number.isFinite(next)) return;
+  const current = Number(state.score || 0);
+  const displayed = Number(state.displayedScore || 0);
+  if (Math.round(current) === Math.round(next) && Math.round(displayed) === Math.round(next)) return;
+  state.score = next;
+  animateScoreTo(next);
 }
 
 function applyScoreDelta(delta) {
@@ -1274,6 +1300,27 @@ function closenessStatusLabel(status) {
   return "Missing";
 }
 
+function totalBlindBonusPoints() {
+  return recordItems().reduce((sum, entry) => {
+    const clip = getClipState(entry.mob, entry.clipKey);
+    return sum + (clip.blindBonusAwarded ? BLIND_BONUS_POINTS : 0);
+  }, 0);
+}
+
+function calculateFinalScoreBreakdown(results) {
+  const closenessPoints = (Array.isArray(results) ? results : []).reduce((sum, row) => {
+    if (row?.status !== "scored") return sum;
+    const pct = Math.max(0, Math.min(100, Number(row.pct || 0)));
+    return sum + Math.round(pct * CLOSENESS_POINTS_PER_PERCENT);
+  }, 0);
+  const bonusPoints = totalBlindBonusPoints();
+  return {
+    closenessPoints,
+    bonusPoints,
+    totalPoints: closenessPoints + bonusPoints
+  };
+}
+
 function createMobDefinition(id, overrides = {}) {
   const cleanId = normalizeMobId(id);
   const name = overrides.mob || toTitleCase(cleanId);
@@ -1495,14 +1542,15 @@ function startClosenessRevealSequence(signature, rowCount) {
     render();
   }, summaryDelay);
 
-  const pointsDelay = summaryDelay + CLOSENESS_POINTS_REVEAL_DELAY_MS;
+  const pointsDelay = summaryDelay + CLOSENESS_RING_ANIMATION_MS + CLOSENESS_POINTS_REVEAL_DELAY_MS;
   const pointsTimer = window.setTimeout(() => {
     if (!canContinueClosenessReveal(signature)) return;
     state.closenessReveal.pointsVisible = true;
     render();
   }, pointsDelay);
 
-  const giftDelay = pointsDelay + CLOSENESS_RING_ANIMATION_MS + GIFT_PACK_REVEAL_BUFFER_MS;
+  const giftDelay =
+    pointsDelay + CLOSENESS_FINAL_SCORE_REVEAL_MS + GIFT_PACK_REVEAL_AFTER_RESULTS_MS;
   const giftTimer = window.setTimeout(() => {
     if (!canContinueClosenessReveal(signature)) return;
     state.closenessReveal.giftVisible = true;
@@ -1562,6 +1610,12 @@ function resetWorkflow() {
   state.hintLoadingMobId = null;
   state.recordingClipId = null;
   state.recordingFinalizing = false;
+  if (state.challengeLeaderboardHideTimer) {
+    clearTimeout(state.challengeLeaderboardHideTimer);
+    state.challengeLeaderboardHideTimer = null;
+  }
+  state.showChallengeLeaderboard = true;
+  state.challengeLeaderboardHiding = false;
   state.showAddMobPanel = false;
   state.addMobInput = "";
   state.recordNotice = "";
@@ -1967,7 +2021,9 @@ function renderRecord(root) {
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-record panel-record-mock">
-      <div class="challenge-layout ${state.showChallengeLeaderboard ? "has-leaderboard" : ""}">
+      <div class="challenge-layout ${state.showChallengeLeaderboard ? "has-leaderboard" : ""} ${
+        state.challengeLeaderboardHiding ? "is-leaderboard-hiding" : ""
+      }">
         <section class="challenge-card">
           <div class="challenge-card-head">
             <h2>Your Challenge:</h2>
@@ -2029,7 +2085,7 @@ function renderRecord(root) {
               </div>
               ${
                 blindBonusAvailable
-                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}">🎯 Risk It: +${BLIND_BONUS_POINTS}</span>`
+                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}">Blind Bonus: +${BLIND_BONUS_POINTS}</span>`
                   : ""
               }
             </div>
@@ -2065,7 +2121,9 @@ function renderRecord(root) {
         </section>
         ${
           state.showChallengeLeaderboard
-            ? `<aside id="challenge-leaderboard-panel" class="leaderboard-card" aria-label="Leaderboard">
+            ? `<aside id="challenge-leaderboard-panel" class="leaderboard-card ${
+                state.challengeLeaderboardHiding ? "is-hiding" : ""
+              }" aria-label="Leaderboard">
           <h2>Leaderboard</h2>
           <ol>${leaderboardRowsMarkup}</ol>
         </aside>`
@@ -2113,6 +2171,22 @@ function renderRecord(root) {
   };
   if (hintBtn) {
     hintBtn.onclick = onOriginalToggle;
+  }
+  const challengeCard = root.querySelector(".challenge-card");
+  if (challengeCard) {
+    const onChallengeCardInteraction = (event) => {
+      if (!state.showChallengeLeaderboard || state.challengeLeaderboardHiding) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const control = target.closest("button, input, select, textarea, a[href], [role='button']");
+      if (!control || control.matches(":disabled")) return;
+      hideChallengeLeaderboardPanel();
+    };
+    challengeCard.addEventListener("pointerdown", onChallengeCardInteraction);
+    challengeCard.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      onChallengeCardInteraction(event);
+    });
   }
   const recordedWavePlayBtn = root.querySelector("#play-recorded-waveform");
   if (recordedWavePlayBtn) {
@@ -2260,6 +2334,10 @@ function renderExport(root) {
   const pointsVisible = closeness.status === "ready" ? state.closenessReveal.pointsVisible : true;
   const showRing = summaryVisible && closeness.status === "ready";
   const scoredRows = closeness.results.filter((row) => row.status === "scored");
+  const finalScore = calculateFinalScoreBreakdown(closeness.results);
+  if (closeness.status === "ready" && pointsVisible) {
+    syncScoreToTotal(finalScore.totalPoints);
+  }
   const clipByMobId = new Map(
     state.mobs.map((mob) => {
       const cleanId = normalizeMobId(mob.id);
@@ -2332,6 +2410,14 @@ function renderExport(root) {
   const closenessPanelClass = `closeness-panel is-static${summaryVisible ? " is-summary-visible" : ""}${
     pointsVisible ? " is-points-visible" : ""
   }`;
+  const finalScoreCardMarkup =
+    closeness.status === "ready" && pointsVisible
+      ? `<div class="closeness-final-score-card" role="status" aria-live="polite">
+          <p class="closeness-final-score-label">Final Score</p>
+          <p class="closeness-final-score-value"><strong>${Math.round(finalScore.totalPoints).toLocaleString("en-US")}</strong></p>
+          <p class="note closeness-final-score-breakdown">${Math.round(finalScore.closenessPoints).toLocaleString("en-US")} from closeness + ${Math.round(finalScore.bonusPoints).toLocaleString("en-US")} bonus</p>
+        </div>`
+      : "";
   const chartFallback =
     closeness.status === "ready" && state.closenessReveal.started
       ? '<p class="note closeness-stage-note">Loading mob-by-mob scores...</p>'
@@ -2375,19 +2461,17 @@ function renderExport(root) {
             showRing
               ? `<div class="closeness-total-ring" style="--total-pct:${Math.max(0, closeness.overallPct || 0)};">
             <span>${closeness.overallPct == null ? "--" : `${closeness.overallPct}%`}</span>
-          </div>`
+          </div>
+          ${finalScoreCardMarkup}`
               : ""
           }`
               : `<p class="note closeness-stage-note">Revealing mob closeness scores (${rowsShownForStatus}/${Math.max(1, closeness.results.length)})...</p>`
           }
-          ${
-            pointsVisible
-              ? `<p class="note closeness-points-row">Total points: <strong>${Math.round(state.displayedScore)}</strong></p>`
-              : '<p class="note closeness-points-row is-pending">Final points tally is loading...</p>'
-          }
         </div>
-        <div class="${closenessChartClass}">
-          ${chartRows.length ? chartRows.join("") : chartFallback}
+        <div class="closeness-results-column">
+          <div class="${closenessChartClass}">
+            ${chartRows.length ? chartRows.join("") : chartFallback}
+          </div>
         </div>
       </section>
       ${

@@ -1263,6 +1263,7 @@ audio {
   background: radial-gradient(circle, rgba(245, 255, 196, 0.95) 0%, rgba(245, 255, 196, 0) 66%);
   pointer-events: none;
   mix-blend-mode: screen;
+  opacity: 0;
   animation: gift-pack-flash 620ms ease-out;
 }
 
@@ -1507,6 +1508,12 @@ audio {
   align-content: start;
 }
 
+.closeness-results-column {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
 .closeness-chart.is-scrollable {
   --closeness-visible-rows: 10;
   --closeness-row-size: 56px;
@@ -1657,7 +1664,59 @@ audio {
   color: #5a6780;
 }
 
+.closeness-final-score-card {
+  border: 1px solid #9bb2d0;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #eff5ff, #e2ecfa);
+  padding: 12px 14px;
+  display: grid;
+  gap: 4px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 8px 18px rgba(67, 96, 139, 0.18);
+}
+
+.closeness-total .closeness-final-score-card {
+  width: min(100%, 340px);
+  justify-self: center;
+  text-align: center;
+  animation: rise-in 420ms ease-out both;
+}
+
+.closeness-final-score-label {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: #4f6180;
+}
+
+.closeness-final-score-value {
+  margin: 0;
+  font-size: clamp(1.55rem, 3.2vw, 2.15rem);
+  line-height: 1.05;
+}
+
+.closeness-final-score-value strong {
+  color: #2d4265;
+}
+
+.closeness-final-score-breakdown {
+  margin: 0;
+  font-size: 0.89rem;
+  color: #536584;
+}
+
+.closeness-points-row {
+  margin: 0;
+}
+
 .closeness-points-row.is-pending {
+  border: 1px dashed #bcc9dc;
+  border-radius: 10px;
+  background: #f2f6fc;
+  padding: 10px 12px;
   color: #6f7d95;
   font-style: italic;
 }
@@ -2284,11 +2343,20 @@ h1 {
   display: grid;
   grid-template-columns: 1fr;
   gap: 18px;
+  transition: gap 380ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .challenge-layout.has-leaderboard {
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
   align-items: start;
+  transition:
+    grid-template-columns 380ms cubic-bezier(0.2, 0.7, 0.2, 1),
+    gap 380ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.challenge-layout.has-leaderboard.is-leaderboard-hiding {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0fr);
+  gap: 0;
 }
 
 .challenge-card,
@@ -2302,6 +2370,7 @@ h1 {
   padding: 14px;
   display: grid;
   gap: 12px;
+  min-width: 0;
 }
 
 .challenge-card-head {
@@ -2797,6 +2866,31 @@ h1 {
   padding: 14px;
   display: grid;
   gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  transform-origin: right top;
+}
+
+.challenge-layout.has-leaderboard .leaderboard-card {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+  max-height: 1500px;
+  transition:
+    opacity 280ms ease,
+    transform 380ms cubic-bezier(0.2, 0.7, 0.2, 1),
+    max-height 380ms cubic-bezier(0.2, 0.7, 0.2, 1),
+    padding 380ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.challenge-layout.has-leaderboard.is-leaderboard-hiding .leaderboard-card,
+.challenge-layout .leaderboard-card.is-hiding {
+  opacity: 0;
+  transform: translateX(14px) scale(0.98);
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-color: transparent;
+  pointer-events: none;
 }
 
 .leaderboard-card ol {
@@ -3293,6 +3387,8 @@ h1 {
 :root[data-theme="dark"] .closeness-kicker,
 :root[data-theme="dark"] .closeness-total h3,
 :root[data-theme="dark"] .closeness-total-ring span,
+:root[data-theme="dark"] .closeness-final-score-label,
+:root[data-theme="dark"] .closeness-final-score-breakdown,
 :root[data-theme="dark"] .closeness-row-head strong {
   color: #d8dde8;
 }
@@ -3300,6 +3396,23 @@ h1 {
 :root[data-theme="dark"] .closeness-stage-note,
 :root[data-theme="dark"] .closeness-points-row.is-pending {
   color: #b8c4d7;
+}
+
+:root[data-theme="dark"] .closeness-final-score-card {
+  border-color: #4d5f79;
+  background: linear-gradient(180deg, #2a3342, #222a37);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 10px 24px rgba(0, 0, 0, 0.34);
+}
+
+:root[data-theme="dark"] .closeness-final-score-value strong {
+  color: #f3f6fe;
+}
+
+:root[data-theme="dark"] .closeness-points-row.is-pending {
+  border-color: #4f5b6f;
+  background: #232a35;
 }
 
 :root[data-theme="dark"] .closeness-total-ring {
@@ -3356,6 +3469,15 @@ h1 {
   .challenge-layout,
   .challenge-layout.has-leaderboard {
     grid-template-columns: 1fr;
+  }
+
+  .challenge-layout.has-leaderboard.is-leaderboard-hiding {
+    gap: 0;
+  }
+
+  .challenge-layout.has-leaderboard.is-leaderboard-hiding .leaderboard-card,
+  .challenge-layout .leaderboard-card.is-hiding {
+    transform: translateY(-8px) scale(0.99);
   }
 }
 
@@ -3728,6 +3850,163 @@ body.advanced-page .log-box {
 body.advanced-page .log-box {
   border-color: var(--adv-log-border);
   background: var(--adv-log-bg);
+}
+
+/* Extend how-to modal palette to the full site */
+:root[data-theme="light"] {
+  --howto-theme-page-bg:
+    radial-gradient(circle at 50% -22%, rgba(150, 208, 255, 0.42), transparent 52%),
+    radial-gradient(circle at 8% 12%, rgba(117, 169, 235, 0.18), transparent 42%),
+    linear-gradient(180deg, #f4f8ff 0%, #e8f0fb 100%);
+  --howto-theme-surface-bg:
+    radial-gradient(circle at 88% 6%, rgba(150, 208, 255, 0.28), transparent 42%),
+    linear-gradient(170deg, #ffffff, #edf3fb);
+  --howto-theme-surface-border: #9db6d8;
+  --howto-theme-surface-shadow:
+    0 16px 34px rgba(31, 52, 81, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  --howto-theme-subtle-bg: linear-gradient(180deg, #fafdff, #edf4ff);
+  --howto-theme-subtle-border: #cddbf0;
+  --howto-theme-button-bg: linear-gradient(180deg, #ffffff, #eef4fb);
+  --howto-theme-button-border: #b7c6da;
+  --howto-theme-button-text: #435776;
+  --howto-theme-primary-bg: linear-gradient(180deg, #68aafc, #2e67c0);
+  --howto-theme-primary-border: #5076a3;
+  --howto-theme-primary-text: #f3f8ff;
+  --howto-theme-text: #1a2434;
+  --howto-theme-muted: #40516c;
+}
+
+:root[data-theme="dark"] {
+  --howto-theme-page-bg:
+    radial-gradient(circle at 50% -18%, rgba(98, 147, 221, 0.24), transparent 56%),
+    radial-gradient(circle at 6% 10%, rgba(70, 113, 176, 0.18), transparent 42%),
+    linear-gradient(180deg, #121a27 0%, #0c1420 100%);
+  --howto-theme-surface-bg:
+    radial-gradient(circle at 85% 8%, rgba(99, 148, 221, 0.2), transparent 45%),
+    linear-gradient(170deg, #27303b, #1f252f);
+  --howto-theme-surface-border: #4a5f7e;
+  --howto-theme-surface-shadow:
+    0 22px 42px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --howto-theme-subtle-bg: linear-gradient(180deg, #2b3645, #222d3b);
+  --howto-theme-subtle-border: #4d607b;
+  --howto-theme-button-bg: linear-gradient(180deg, #36465e, #2a3749);
+  --howto-theme-button-border: #607594;
+  --howto-theme-button-text: #e4edfb;
+  --howto-theme-primary-bg: linear-gradient(180deg, #4d81cb, #315f9f);
+  --howto-theme-primary-border: #70a2d8;
+  --howto-theme-primary-text: #f3f8ff;
+  --howto-theme-text: #ecf1f8;
+  --howto-theme-muted: #c1cbda;
+}
+
+:root[data-theme] body,
+:root[data-theme] body.advanced-page {
+  color: var(--howto-theme-text);
+  background: var(--howto-theme-page-bg);
+}
+
+:root[data-theme] h1,
+:root[data-theme] .challenge-card h2,
+:root[data-theme] .leaderboard-card h2,
+:root[data-theme] .challenge-callout,
+:root[data-theme] .scoreboard-strip strong,
+:root[data-theme] .leaderboard-card li span,
+:root[data-theme] .leaderboard-card li strong,
+:root[data-theme] .closeness-total h3,
+:root[data-theme] .closeness-total-ring span,
+:root[data-theme] .closeness-final-score-value strong,
+:root[data-theme] .closeness-row-head strong,
+:root[data-theme] body.advanced-page .advanced-mob-title {
+  color: var(--howto-theme-text);
+}
+
+:root[data-theme] .subtitle,
+:root[data-theme] .scoreboard-strip p,
+:root[data-theme] .waveform-label,
+:root[data-theme] .export-summary,
+:root[data-theme] .closeness-kicker,
+:root[data-theme] .closeness-final-score-label,
+:root[data-theme] .closeness-final-score-breakdown,
+:root[data-theme] .closeness-stage-note,
+:root[data-theme] .closeness-points-row.is-pending,
+:root[data-theme] .advanced-filter-label,
+:root[data-theme] .advanced-mob-sub,
+:root[data-theme] body.advanced-page .advanced-panel summary,
+:root[data-theme] body.advanced-page .advanced-recorder-panel .note,
+:root[data-theme] body.advanced-page .log-box {
+  color: var(--howto-theme-muted);
+}
+
+:root[data-theme] .challenge-card,
+:root[data-theme] .leaderboard-card,
+:root[data-theme] .panel-export,
+:root[data-theme] .export-pack-card,
+:root[data-theme] .closeness-panel,
+:root[data-theme] .closeness-final-score-card,
+:root[data-theme] .similarity-loading-card,
+:root[data-theme] body.advanced-page .panel-export {
+  border-color: var(--howto-theme-surface-border);
+  background: var(--howto-theme-surface-bg);
+  box-shadow: var(--howto-theme-surface-shadow);
+}
+
+:root[data-theme] .add-mob-form,
+:root[data-theme] .mob-checklist,
+:root[data-theme] .log-box,
+:root[data-theme] .log-details,
+:root[data-theme] .install-details,
+:root[data-theme] .install-card,
+:root[data-theme] body.advanced-page .advanced-recorder-panel,
+:root[data-theme] body.advanced-page .advanced-panel {
+  border-color: var(--howto-theme-surface-border);
+  background: var(--howto-theme-subtle-bg);
+}
+
+:root[data-theme] .scoreboard-strip,
+:root[data-theme] .challenge-stage,
+:root[data-theme] .leaderboard-card li,
+:root[data-theme] .similarity-calc-list li,
+:root[data-theme] .closeness-points-row.is-pending,
+:root[data-theme] .closeness-row,
+:root[data-theme] .original-sound-wave,
+:root[data-theme] .recorded-sound-wave,
+:root[data-theme] .add-mob-form input,
+:root[data-theme] body.advanced-page .advanced-filter-input,
+:root[data-theme] body.advanced-page .advanced-mob-row {
+  border-color: var(--howto-theme-subtle-border);
+  background: var(--howto-theme-subtle-bg);
+}
+
+:root[data-theme] body.advanced-page .advanced-mob-row:hover {
+  border-color: var(--howto-theme-surface-border);
+}
+
+:root[data-theme] .theme-toggle-btn,
+:root[data-theme] .how-to-help-btn,
+:root[data-theme] .challenge-mini-controls .ghost-btn,
+:root[data-theme] .ghost-btn,
+:root[data-theme] .leaderboard-btn,
+:root[data-theme] .export-secondary-btn,
+:root[data-theme] body.advanced-page .advanced-mob-actions .tiny-btn {
+  border-color: var(--howto-theme-button-border);
+  background: var(--howto-theme-button-bg);
+  color: var(--howto-theme-button-text);
+  box-shadow: none;
+}
+
+:root[data-theme] .submit-btn,
+:root[data-theme] body.advanced-page .export-primary-btn {
+  border-color: var(--howto-theme-primary-border);
+  background: var(--howto-theme-primary-bg);
+  color: var(--howto-theme-primary-text);
+  box-shadow: 0 14px 26px rgba(37, 86, 156, 0.33);
+}
+
+:root[data-theme] .submit-btn:hover:not(:disabled),
+:root[data-theme] body.advanced-page .export-primary-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
 }
 
 @media (max-width: 760px) {
