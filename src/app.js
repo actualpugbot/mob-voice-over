@@ -297,6 +297,13 @@ const ORIGINAL_WAVEFORM_BAR_COUNT = 96;
 let queuedClosenessSignature = "";
 const MIN_ANALYSIS_RMS = 1e-5;
 const ENVELOPE_BINS = 72;
+const CLOSENESS_ROW_STAGGER_MS = 50;
+const CLOSENESS_BAR_START_OFFSET_MS = 120;
+const CLOSENESS_BAR_ANIMATION_MS = 700;
+const CLOSENESS_BAR_STAGGER_MAX_MS = 850;
+const CLOSENESS_RING_REVEAL_BUFFER_MS = 120;
+const CLOSENESS_RING_ANIMATION_MS = 760;
+const GIFT_PACK_REVEAL_BUFFER_MS = 140;
 
 const state = {
   theme: DEFAULT_THEME,
@@ -309,6 +316,7 @@ const state = {
   recorder: null,
   chunks: [],
   isRecording: false,
+  recordingFinalizing: false,
   meterPct: 0,
   recordingPeak: 0,
   meterTimer: null,
@@ -367,6 +375,9 @@ const state = {
   },
   closenessAnimatedSignature: "",
   giftPackRevealDone: false,
+  giftPackRevealAt: 0,
+  giftPackRevealForSignature: "",
+  giftPackRevealTimer: null,
   showHowToOverlay: false,
   howToDismissAnimating: false,
   mobImageLoopTimer: null,
@@ -975,6 +986,11 @@ async function ensureOriginalWaveformForMob(mob) {
 async function generateRecordingWaveformForClip(mob, clipKey = BASIC_CLIP_KEY, blobOverride = null) {
   const clip = getClipState(mob, clipKey);
   const blob = blobOverride || clip?.recording?.blob;
+  const isVisibleInMainFlow = () => {
+    if (IS_ADVANCED_PAGE) return true;
+    const activeMob = state.mobs[state.recordIndex];
+    return normalizeMobId(activeMob?.id) === normalizeMobId(mob?.id) && activeClipKeyForMob() === clipKey;
+  };
   if (!blob) {
     clip.recordingWaveformMarkup = "";
     clip.recordingWaveformLoading = false;
@@ -982,7 +998,7 @@ async function generateRecordingWaveformForClip(mob, clipKey = BASIC_CLIP_KEY, b
   }
 
   clip.recordingWaveformLoading = true;
-  refreshAdvancedPageUi();
+  if (isVisibleInMainFlow()) refreshAdvancedPageUi();
   try {
     const features = await decodeAudioBlob(blob);
     if (clip.recording?.blob !== blob && !blobOverride) return;
@@ -993,7 +1009,7 @@ async function generateRecordingWaveformForClip(mob, clipKey = BASIC_CLIP_KEY, b
   } finally {
     if (clip.recording?.blob === blob || blobOverride) {
       clip.recordingWaveformLoading = false;
-      refreshAdvancedPageUi();
+      if (isVisibleInMainFlow()) refreshAdvancedPageUi();
     }
   }
 }
@@ -1273,6 +1289,13 @@ function clearRevealTimers() {
   state.revealTimers = [];
 }
 
+function clearGiftPackRevealTimer() {
+  if (state.giftPackRevealTimer) {
+    clearTimeout(state.giftPackRevealTimer);
+    state.giftPackRevealTimer = null;
+  }
+}
+
 function beginTwistReveal() {
   clearRevealTimers();
   state.revealPhase = 1;
@@ -1303,6 +1326,7 @@ function advanceToNextMob() {
 
 function resetWorkflow() {
   clearRevealTimers();
+  clearGiftPackRevealTimer();
   stopPreviewAudio();
   stopHintAudio();
   state.mobs.forEach((mob) => {
@@ -1320,6 +1344,7 @@ function resetWorkflow() {
   state.lastZipName = "";
   state.hintLoadingMobId = null;
   state.recordingClipId = null;
+  state.recordingFinalizing = false;
   state.showAddMobPanel = false;
   state.addMobInput = "";
   state.recordNotice = "";
@@ -1350,6 +1375,9 @@ function resetWorkflow() {
       error: ""
   };
   state.closenessAnimatedSignature = "";
+  state.giftPackRevealDone = false;
+  state.giftPackRevealAt = 0;
+  state.giftPackRevealForSignature = "";
   updateCompletedCount();
 }
 
@@ -1515,7 +1543,10 @@ function render() {
   stopMobImageLoop();
   updateCompletedCount();
   if (state.step !== 1) {
+    clearGiftPackRevealTimer();
     state.giftPackRevealDone = false;
+    state.giftPackRevealAt = 0;
+    state.giftPackRevealForSignature = "";
   }
   app.innerHTML = "";
   const page = el(`<section class="sheet"></section>`);
@@ -1679,23 +1710,25 @@ function renderRecord(root) {
     ensureOriginalWaveformForMob(mob).catch(() => {});
   }
   const hintProgressPct = Math.round(hintPlaybackProgress() * 1000) / 10;
-  const canAccept = Boolean(clip.recording?.url) && !clip.accepted && !state.isRecording && !clip.converting;
+  const recordingBusy = state.isRecording || state.recordingFinalizing;
+  const canAccept = Boolean(clip.recording?.url) && !clip.accepted && !recordingBusy && !clip.converting;
   const listenedCount = Number(clip.listenCount || 0);
   const heardOriginal = listenedCount > 0;
   const listenPenaltyApplied = Math.min(Math.max(0, listenedCount - 1), ORIGINAL_REPLAY_PENALTY_CAP / ORIGINAL_REPLAY_PENALTY);
   const hasRecordedYet = Number(clip.takes || 0) > 0 || Boolean(clip.recording?.blob);
   const blindBonusAvailable = !clip.hasListened && !hasRecordedYet && !clip.riskChipDismissed;
   const blindChipFading = state.riskChipFadingClipId === item.clipId;
-  const canPreviewRecording = Boolean(clip.recording?.url) && !state.isRecording && !clip.converting;
+  const canPreviewRecording = Boolean(clip.recording?.url) && !recordingBusy && !clip.converting;
   const isPreviewingRecording = state.previewClipId === item.clipId && Boolean(state.previewAudio);
+  const hasRecordingPlayback = Boolean(clip.recording?.url);
   const recordingWaveformMarkup = clip.recordingWaveformMarkup || "";
   const recordingWaveformLoading = Boolean(clip.recordingWaveformLoading);
   if (clip.recording?.blob && !recordingWaveformMarkup && !recordingWaveformLoading) {
     generateRecordingWaveformForClip(mob, clipKey).catch(() => {});
   }
   const previewProgressPct = isPreviewingRecording ? Math.round(previewPlaybackProgress() * 1000) / 10 : 0;
-  const canGoNext = (clip.accepted || canAccept) && !state.isRecording && !clip.converting;
-  const canSkip = !state.isRecording && !clip.converting && !clip.accepted;
+  const canGoNext = (clip.accepted || canAccept) && !recordingBusy && !clip.converting;
+  const canSkip = !recordingBusy && !clip.converting && !clip.accepted;
   const nextLabel = clip.accepted ? (isLastMob ? "Finish" : "Next") : `Accept (+${ACCEPT_POINTS})`;
   const hintBtnLabel = hintPlaying
     ? "Stop Original Sound"
@@ -1720,18 +1753,15 @@ function renderRecord(root) {
             </figure>
             <p class="challenge-callout">${escapeHtml(mob.mob).toUpperCase()}</p>
           </div>
-          <p class="waveform-label">Original Sound</p>
           <div class="original-wave-row ${hintPlaying ? "is-playing" : ""}">
             <button
-              id="play-original-waveform"
-              class="original-wave-play-btn ${hintPlaying ? "is-playing" : ""}"
+              id="play-original-hint"
+              class="mock-btn mock-btn-green waveform-action-btn original-wave-action-btn ${hintPlaying ? "playing" : ""}"
               type="button"
               ${hintLoading ? "disabled" : ""}
               aria-label="${hintPlaying ? "Pause original sound" : "Play original sound"}"
               title="${hintPlaying ? "Pause original sound" : "Play original sound"}"
-            >
-              <span class="original-wave-play-glyph" aria-hidden="true"></span>
-            </button>
+            >${hintBtnLabel}</button>
             <div
               class="original-sound-wave ${hintWaveformLoading ? "is-loading" : ""}"
               style="--hint-progress:${hintProgressPct};"
@@ -1749,18 +1779,35 @@ function renderRecord(root) {
               <span class="original-wave-cursor" aria-hidden="true"></span>
             </div>
           </div>
-          <p class="waveform-label">Your Recording</p>
           <div class="recorded-wave-row ${isPreviewingRecording ? "is-playing" : ""}">
-            <button
-              id="play-recorded-waveform"
-              class="recorded-wave-play-btn ${isPreviewingRecording ? "is-playing" : ""}"
-              type="button"
-              ${canPreviewRecording ? "" : "disabled"}
-              aria-label="${isPreviewingRecording ? "Pause your recording" : "Play your recording"}"
-              title="${isPreviewingRecording ? "Pause your recording" : "Play your recording"}"
-            >
-              <span class="recorded-wave-play-glyph" aria-hidden="true"></span>
-            </button>
+            <div class="record-chip-wrap recorded-wave-action-wrap">
+              <div class="recorded-wave-controls ${hasRecordingPlayback ? "has-preview" : ""}">
+                <button id="record" class="mock-btn mock-btn-blue waveform-action-btn recorded-wave-action-btn ${
+                  state.isRecording ? "recording" : ""
+                }" ${clip.converting || clip.accepted || state.recordingFinalizing ? "disabled" : ""}>
+                  <span class="record-pill-label">${state.isRecording ? "Stop Recording" : idleRecordButtonLabel(clip)}</span>
+                </button>
+                ${
+                  hasRecordingPlayback
+                    ? `<button
+                        id="play-recorded-waveform"
+                        class="recorded-wave-play-btn ${isPreviewingRecording ? "is-playing" : ""}"
+                        type="button"
+                        ${canPreviewRecording ? "" : "disabled"}
+                        aria-label="${isPreviewingRecording ? "Pause your recording" : "Play your recording"}"
+                        title="${isPreviewingRecording ? "Pause your recording" : "Play your recording"}"
+                      >
+                        <span class="recorded-wave-play-glyph" aria-hidden="true"></span>
+                      </button>`
+                    : ""
+                }
+              </div>
+              ${
+                blindBonusAvailable
+                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}">🎯 Risk It: +${BLIND_BONUS_POINTS}</span>`
+                  : ""
+              }
+            </div>
             <div
               class="recorded-sound-wave ${recordingWaveformLoading ? "is-loading" : ""}"
               data-preview-clip-id="${escapeHtml(item.clipId)}"
@@ -1785,27 +1832,8 @@ function renderRecord(root) {
               <span class="recorded-wave-cursor" aria-hidden="true"></span>
             </div>
           </div>
-          <div class="challenge-actions">
-            <button
-              id="play-original-hint"
-              class="mock-btn mock-btn-green ${hintPlaying ? "playing" : ""}"
-              ${hintLoading ? "disabled" : ""}
-            >${hintBtnLabel}</button>
-            <div class="record-chip-wrap">
-              <button id="record" class="mock-btn mock-btn-blue ${state.isRecording ? "recording" : ""}" ${
-                clip.converting || clip.accepted ? "disabled" : ""
-              }>
-                <span class="record-pill-label">${state.isRecording ? "Stop Recording" : idleRecordButtonLabel(clip)}</span>
-              </button>
-              ${
-                blindBonusAvailable
-                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}">🎯 Risk It: +${BLIND_BONUS_POINTS}</span>`
-                  : ""
-              }
-            </div>
-          </div>
           <div class="challenge-primary-controls">
-            <button id="prev" class="ghost-btn" ${state.recordIndex === 0 || state.isRecording ? "disabled" : ""}>Previous</button>
+            <button id="prev" class="ghost-btn" ${state.recordIndex === 0 || recordingBusy ? "disabled" : ""}>Previous</button>
             <button id="next" class="submit-btn" ${canGoNext ? "" : "disabled"}>${nextLabel}</button>
             <button id="skip-circle" class="ghost-btn" ${canSkip ? "" : "disabled"}>Skip (-${SKIP_PENALTY})</button>
           </div>
@@ -1822,7 +1850,7 @@ function renderRecord(root) {
             : "Enable microphone now so you are prompted before recording."
         }</p>
         <button id="enable-mic" class="ghost-btn" ${
-          state.isRecording || state.micStatus === "unsupported" ? "disabled" : ""
+          recordingBusy || state.micStatus === "unsupported" ? "disabled" : ""
         }>Enable Microphone</button>
       </div>`
           : ""
@@ -1835,7 +1863,6 @@ function renderRecord(root) {
   );
 
   const hintBtn = root.querySelector("#play-original-hint");
-  const wavePlayBtn = root.querySelector("#play-original-waveform");
   const onOriginalToggle = async () => {
     if (!clip.riskChipDismissed) {
       clip.riskChipDismissed = true;
@@ -1852,9 +1879,6 @@ function renderRecord(root) {
   };
   if (hintBtn) {
     hintBtn.onclick = onOriginalToggle;
-  }
-  if (wavePlayBtn) {
-    wavePlayBtn.onclick = onOriginalToggle;
   }
   const recordedWavePlayBtn = root.querySelector("#play-recorded-waveform");
   if (recordedWavePlayBtn) {
@@ -1985,14 +2009,15 @@ function renderExport(root) {
     const status = closenessStatusLabel(row.status);
     const rowClass = row.status === "scored" ? "is-scored" : "is-unscored";
     const valueText = row.status === "scored" ? `${pct}%` : status;
-    const animDelay = Math.min(idx * 50, 850);
+    const animDelay = Math.min(idx * CLOSENESS_ROW_STAGGER_MS, CLOSENESS_BAR_STAGGER_MAX_MS);
+    const barDelay = animDelay + CLOSENESS_BAR_START_OFFSET_MS;
     const cleanMobId = normalizeMobId(row.mobId);
     const clipEntry = clipByMobId.get(cleanMobId) || null;
     const hasRecording = Boolean(clipEntry?.clip?.recording?.url);
     const rowClipId = clipEntry ? clipIdFor(clipEntry.mob, BASIC_CLIP_KEY) : `${cleanMobId}::${BASIC_CLIP_KEY}`;
     const previewing = hasRecording && state.previewClipId === rowClipId && Boolean(state.previewAudio);
     const playAriaLabel = previewing ? "Stop playback" : `Play ${row.mobName} recording`;
-    return `<div class="closeness-row ${rowClass}">
+    return `<div class="closeness-row ${rowClass}" style="--row-delay:${animDelay}ms;">
       <button
         class="indicator-play-btn closeness-row-play-btn ${previewing ? "is-playing" : ""}"
         type="button"
@@ -2009,7 +2034,7 @@ function renderExport(root) {
           <strong>${escapeHtml(valueText)}</strong>
         </div>
         <div class="closeness-bar-track">
-          <span class="closeness-bar-fill" style="--bar-pct:${pct};--bar-delay:${animDelay}ms;"></span>
+          <span class="closeness-bar-fill" style="--bar-pct:${pct};--bar-delay:${barDelay}ms;"></span>
         </div>
       </div>
     </div>`;
@@ -2033,14 +2058,46 @@ function renderExport(root) {
       ? closeness.error || "Try going back, re-recording, and finishing again."
       : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
   const closenessChartClass = chartRows.length > 10 ? "closeness-chart is-scrollable" : "closeness-chart";
-  const closenessPanelClass = `closeness-panel${shouldAnimateClosenessBars ? "" : " is-static"}`;
-  if (isAnalyzing) {
+  const closenessPanelClass = `closeness-panel${shouldAnimateClosenessBars ? " is-entrance" : " is-static"}`;
+  const maxRowDelay = chartRows.length
+    ? Math.min((chartRows.length - 1) * CLOSENESS_ROW_STAGGER_MS, CLOSENESS_BAR_STAGGER_MAX_MS)
+    : 0;
+  const ringDelay = shouldAnimateClosenessBars && chartRows.length > 0
+    ? maxRowDelay + CLOSENESS_BAR_START_OFFSET_MS + CLOSENESS_BAR_ANIMATION_MS + CLOSENESS_RING_REVEAL_BUFFER_MS
+    : 0;
+  const readySignature = showResults && closeness.status === "ready" ? closeness.lastSignature : "";
+  if (!readySignature) {
+    clearGiftPackRevealTimer();
     state.giftPackRevealDone = false;
+    state.giftPackRevealAt = 0;
+    state.giftPackRevealForSignature = "";
   }
-  const shouldAnimateGiftPack = showResults && !state.giftPackRevealDone;
+  if (!state.giftPackRevealDone && readySignature && state.giftPackRevealForSignature !== readySignature) {
+    clearGiftPackRevealTimer();
+    const shouldDelayGiftPack = ringDelay > 0;
+    const revealDelay = shouldDelayGiftPack ? ringDelay + CLOSENESS_RING_ANIMATION_MS + GIFT_PACK_REVEAL_BUFFER_MS : 0;
+    state.giftPackRevealForSignature = readySignature;
+    state.giftPackRevealAt = Date.now() + revealDelay;
+    if (revealDelay > 0) {
+      state.giftPackRevealTimer = window.setTimeout(() => {
+        state.giftPackRevealTimer = null;
+        if (state.step !== 1) return;
+        if (state.closenessAnalysis.status !== "ready") return;
+        if (state.closenessAnalysis.lastSignature !== readySignature) return;
+        render();
+      }, revealDelay);
+    }
+  }
+  const shouldAnimateGiftPack =
+    showResults &&
+    !state.giftPackRevealDone &&
+    Boolean(readySignature) &&
+    state.giftPackRevealForSignature === readySignature &&
+    Date.now() >= state.giftPackRevealAt;
   if (shouldAnimateGiftPack) {
     state.giftPackRevealDone = true;
   }
+  const showGiftPack = showResults && Boolean(readySignature) && (state.giftPackRevealDone || shouldAnimateGiftPack);
 
   root.insertAdjacentHTML(
     "beforeend",
@@ -2065,7 +2122,7 @@ function renderExport(root) {
           <p class="closeness-kicker">Your Results</p>
           <h3>${escapeHtml(closenessHeadline)}</h3>
           <p class="note">${escapeHtml(closenessSubline)}</p>
-          <div class="closeness-total-ring" style="--total-pct:${Math.max(0, closeness.overallPct || 0)};">
+          <div class="closeness-total-ring" style="--total-pct:${Math.max(0, closeness.overallPct || 0)};--ring-delay:${ringDelay}ms;">
             <span>${closeness.overallPct == null ? "--" : `${closeness.overallPct}%`}</span>
           </div>
           <p class="note">Total points: <strong>${Math.round(state.displayedScore)}</strong></p>
@@ -2074,7 +2131,9 @@ function renderExport(root) {
           ${chartRows.length ? chartRows.join("") : '<p class="note">No mobs to analyze yet.</p>'}
         </div>
       </section>
-      <section class="gift-pack-card${shouldAnimateGiftPack ? " is-entrance" : ""}">
+      ${
+        showGiftPack
+          ? `<section class="gift-pack-card${shouldAnimateGiftPack ? " is-entrance" : ""}">
         <p class="gift-pack-kicker">Surprise!</p>
         <p class="gift-pack-message">My gift to you!</p>
         <p class="gift-pack-message">Here are your mob recordings in a resourcepack. Enjoy!</p>
@@ -2084,6 +2143,8 @@ function renderExport(root) {
         </div>
         ${nonOggCount > 0 ? `<p class="warn-note">${nonOggCount} clip(s) will be converted to OGG during export.</p>` : ""}
       </section>`
+          : ""
+      }`
           : ""
       }
       <div>
@@ -2273,6 +2334,7 @@ function updateAdvancedRecorderRowUi(row) {
   const hintPlaying = state.hintPlayingMobId === cleanId && Boolean(state.hintAudio);
   const hintLoading = state.hintLoadingMobId === cleanId;
   const previewing = state.previewClipId === rowClipId && Boolean(state.previewAudio);
+  const recordingBusy = state.isRecording || state.recordingFinalizing;
 
   const titleEl = row.querySelector(".advanced-mob-title");
   if (titleEl) titleEl.textContent = label;
@@ -2290,13 +2352,13 @@ function updateAdvancedRecorderRowUi(row) {
   const recordBtn = row.querySelector(".advanced-record-btn");
   if (recordBtn) {
     recordBtn.classList.toggle("is-recording", rowIsRecording);
-    recordBtn.disabled = Boolean((state.isRecording && !rowIsRecording) || clip?.converting);
+    recordBtn.disabled = Boolean((state.isRecording && !rowIsRecording) || state.recordingFinalizing || clip?.converting);
     recordBtn.textContent = rowIsRecording ? "Stop" : hasRecording ? "Retry" : "Record";
   }
 
   const playBtn = row.querySelector(".advanced-play-btn");
   if (playBtn) {
-    playBtn.disabled = !hasRecording;
+    playBtn.disabled = Boolean(!hasRecording || recordingBusy || clip?.converting);
     playBtn.textContent = previewing ? "Stop Mine" : "Play Mine";
   }
 
@@ -2683,6 +2745,7 @@ async function toggleOriginalHintForMob(mob) {
 }
 
 function toggleClipPreview(mob, clipKey = BASIC_CLIP_KEY) {
+  if (state.isRecording || state.recordingFinalizing) return;
   const clip = getClipState(mob, clipKey);
   if (!clip?.recording?.url) return;
   const currentClipId = clipIdFor(mob, clipKey);
@@ -2715,7 +2778,7 @@ function toggleClipPreview(mob, clipKey = BASIC_CLIP_KEY) {
 }
 
 async function startRecording(item, options = {}) {
-  if (state.isRecording) return;
+  if (state.isRecording || state.recordingFinalizing) return;
   if (!(await ensureMic())) {
     refreshAdvancedPageUi();
     return;
@@ -2728,12 +2791,15 @@ async function startRecording(item, options = {}) {
 
   state.chunks = [];
   state.isRecording = true;
+  state.recordingFinalizing = false;
   state.recordingPeak = 0;
   state.recordingClipId = clipIdFor(mob, clipKey);
+  stopPreviewAudio();
   const mimeType = pickMimeType();
   if (!mimeType) {
     state.isRecording = false;
     state.recordingClipId = null;
+    state.recordingFinalizing = false;
     state.busyMsg = "Recording unavailable: browser does not support required audio codecs.";
     logExport("Recording blocked: no supported MediaRecorder codec found.");
     refreshAdvancedPageUi();
@@ -2782,6 +2848,7 @@ async function startRecording(item, options = {}) {
       state.recordNotice = "No voice was detected, so that recording was not saved.";
       state.isRecording = false;
       state.recordingClipId = null;
+      state.recordingFinalizing = false;
       setRecordingUiActive(false);
       refreshAdvancedPageUi();
       return;
@@ -2823,6 +2890,7 @@ async function startRecording(item, options = {}) {
     state.recordNotice = "";
     state.isRecording = false;
     state.recordingClipId = null;
+    state.recordingFinalizing = false;
     setRecordingUiActive(false);
     refreshAdvancedPageUi();
     if (!blob.type.includes("ogg")) {
@@ -2845,12 +2913,15 @@ function stopRecording() {
   // re-apply the recording style before MediaRecorder.onstop fires.
   state.isRecording = false;
   state.recordingClipId = null;
+  state.recordingFinalizing = true;
   clearRecordingCountdown();
   setRecordingUiActive(false);
   try {
     state.recorder.stop();
   } catch (err) {
     console.warn("Recorder stop failed:", err);
+    state.recordingFinalizing = false;
+    refreshAdvancedPageUi();
   }
 }
 
@@ -2864,6 +2935,14 @@ function setRecordingUiActive(isActive) {
       const currentClip = currentMob ? getClipState(currentMob, activeClipKeyForMob()) : null;
       label.textContent = isActive ? "Stop Recording" : idleRecordButtonLabel(currentClip);
     }
+  }
+  const recordedPreviewBtn = document.querySelector("#play-recorded-waveform");
+  if (recordedPreviewBtn) {
+    const currentMob = state.mobs[state.recordIndex];
+    const currentClip = currentMob ? getClipState(currentMob, activeClipKeyForMob()) : null;
+    const previewAllowed =
+      Boolean(currentClip?.recording?.url) && !state.isRecording && !state.recordingFinalizing && !currentClip?.converting;
+    recordedPreviewBtn.disabled = !previewAllowed;
   }
   updateRecordingIndicator();
 }
@@ -2883,6 +2962,11 @@ function wireRecordToggle(button, item) {
 
 async function convertClipRecordingToOgg(mob, clipKey = BASIC_CLIP_KEY) {
   const clip = getClipState(mob, clipKey);
+  const isVisibleInMainFlow = () => {
+    if (IS_ADVANCED_PAGE) return true;
+    const activeMob = state.mobs[state.recordIndex];
+    return normalizeMobId(activeMob?.id) === normalizeMobId(mob?.id) && activeClipKeyForMob() === clipKey;
+  };
   if (!clip?.recording?.blob) return;
   if (String(clip.recording.blob.type || "").includes("ogg")) return;
   if (clip.converting) return;
@@ -2890,7 +2974,7 @@ async function convertClipRecordingToOgg(mob, clipKey = BASIC_CLIP_KEY) {
   clip.converting = true;
   state.busyMsg = "Converting recording to OGG...";
   logExport(`Converting ${mob.id}/${clipKey} immediately after recording...`);
-  refreshAdvancedPageUi();
+  if (isVisibleInMainFlow()) refreshAdvancedPageUi();
 
   try {
     const ogg = await toOgg(clip.recording.blob, `${mob.id}_${clipKey}`);
@@ -2915,7 +2999,7 @@ async function convertClipRecordingToOgg(mob, clipKey = BASIC_CLIP_KEY) {
     throw err;
   } finally {
     clip.converting = false;
-    refreshAdvancedPageUi();
+    if (isVisibleInMainFlow()) refreshAdvancedPageUi();
   }
 }
 
