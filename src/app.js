@@ -25,6 +25,13 @@ const DEFAULT_MOB_SET_ID = "basic";
 const BASIC_CLIP_KEY = "__mob_default__";
 const THEME_STORAGE_KEY = "mob_voice_over_theme";
 const HOW_TO_DISMISSED_STORAGE_KEY = "mob_voice_over_how_to_dismissed";
+const CHALLENGE_LEADERBOARD_ROWS = Object.freeze([
+  { name: "ActualPug", score: 12450 },
+  { name: "MildMadi", score: 11820 },
+  { name: "Etho", score: 10910 },
+  { name: "Grian", score: 10140 },
+  { name: "MumboJumbo", score: 9730 }
+]);
 const DEFAULT_THEME = "light";
 const ACTUALPUG_YOUTUBE_URL = "https://www.youtube.com/@actualpug";
 const EXTRA_MOB_IMAGE_EXTENSIONS = Object.freeze({
@@ -394,6 +401,7 @@ const state = {
   closenessRevealTimers: [],
   showHowToOverlay: false,
   howToDismissAnimating: false,
+  showChallengeLeaderboard: true,
   mobImageLoopTimer: null,
   mobImageLoopToken: 0
 };
@@ -469,6 +477,15 @@ function dismissHowToOverlayWithGenie(page) {
   };
   card.addEventListener("animationend", finish, { once: true });
   window.setTimeout(finish, 520);
+}
+
+function hideChallengeLeaderboardPanel() {
+  if (IS_ADVANCED_PAGE || !state.showChallengeLeaderboard) return;
+  state.showChallengeLeaderboard = false;
+  const layout = document.querySelector(".challenge-layout.has-leaderboard");
+  const panel = document.querySelector("#challenge-leaderboard-panel");
+  if (panel) panel.remove();
+  if (layout) layout.classList.remove("has-leaderboard");
 }
 
 function createClipState() {
@@ -1845,15 +1862,23 @@ function render() {
               <path d="M4 4 L12 12 M12 4 L4 12"></path>
             </svg>
           </button>
-          <h2 id="how-to-title">How to Play:</h2>
-          <ul class="how-to-list">
-            <li>Imitate the mob sound with your voice.</li>
-            <li>We analyze your recordings and score them based on how close they match the original mob sounds.</li>
-            <li>Bonus points if you record without hearing the original mob sound.</li>
-            <li>Bonus points if you do not re-record your mob sound.</li>
-            <li>80% and higher accuracy is legendary.</li>
+          <p class="how-to-kicker">Quick Briefing</p>
+          <h2 id="how-to-title">How to Win the Mob Voice Challenge</h2>
+          <p class="how-to-intro">Sound as close to the original mob as you can and climb into legendary territory.</p>
+          <ol class="how-to-list">
+            <li><strong>Listen first.</strong> Play the original sound and lock in its pitch, rhythm, and attitude.</li>
+            <li><strong>Record your best take.</strong> Imitate the mob as closely as possible in your own voice.</li>
+            <li><strong>Chase bonus points.</strong> Skip hints and avoid re-recording to maximize your final score.</li>
+            <li><strong>Aim for 80%+ accuracy.</strong> That is the legendary threshold.</li>
+          </ol>
+          <div class="how-to-score-band" role="note">Score tiers</div>
+          <ul class="how-to-score-list" aria-label="Score tiers">
+            <li><span>95-100%</span> Mythic</li>
+            <li><span>80-94%</span> Legendary</li>
+            <li><span>60-79%</span> Solid run</li>
           </ul>
-          <button id="start-challenge-cta" class="submit-btn" type="button">Start Challenge!</button>
+          <p class="how-to-footer-note">One clean take with no hints is the fastest way to top the board.</p>
+          <button id="start-challenge-cta" class="submit-btn" type="button">Start Challenge</button>
         </div>
       </section>`
     );
@@ -1933,10 +1958,16 @@ function renderRecord(root) {
       : "Hear Original (Free)";
   const recordingMaxMs = state.recordingMaxMs || maxRecordingMs(mob);
   const recordingRemainingMs = state.isRecording ? state.recordingRemainingMs : recordingMaxMs;
+  const leaderboardRowsMarkup = CHALLENGE_LEADERBOARD_ROWS.map(
+    (entry, idx) =>
+      `<li><span>${idx + 1}. ${escapeHtml(entry.name)}</span><strong>${escapeHtml(
+        Number(entry.score).toLocaleString("en-US")
+      )}</strong></li>`
+  ).join("");
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-record panel-record-mock">
-      <div class="challenge-layout">
+      <div class="challenge-layout ${state.showChallengeLeaderboard ? "has-leaderboard" : ""}">
         <section class="challenge-card">
           <div class="challenge-card-head">
             <h2>Your Challenge:</h2>
@@ -2032,6 +2063,14 @@ function renderRecord(root) {
             <button id="skip-circle" class="ghost-btn" ${canSkip ? "" : "disabled"}>Skip (-${SKIP_PENALTY})</button>
           </div>
         </section>
+        ${
+          state.showChallengeLeaderboard
+            ? `<aside id="challenge-leaderboard-panel" class="leaderboard-card" aria-label="Leaderboard">
+          <h2>Leaderboard</h2>
+          <ol>${leaderboardRowsMarkup}</ol>
+        </aside>`
+            : ""
+        }
       </div>
       ${
         state.micStatus !== "ready"
@@ -2058,6 +2097,7 @@ function renderRecord(root) {
 
   const hintBtn = root.querySelector("#play-original-hint");
   const onOriginalToggle = async () => {
+    hideChallengeLeaderboardPanel();
     if (!clip.riskChipDismissed) {
       clip.riskChipDismissed = true;
       state.riskChipFadingClipId = item.clipId;
@@ -2133,6 +2173,7 @@ function renderRecord(root) {
   if (basicSkipBtn) {
     basicSkipBtn.onclick = () => {
       if (state.isRecording || clip.converting) return;
+      hideChallengeLeaderboardPanel();
       stopHintAudio();
       applyScoreDelta(-SKIP_PENALTY);
       if (clip.recording?.url) URL.revokeObjectURL(clip.recording.url);
@@ -3170,6 +3211,7 @@ function wireRecordToggle(button, item) {
   button.onclick = async (ev) => {
     if (ev) ev.preventDefault();
     if (getClipState(item.mob, item.clipKey).converting) return;
+    hideChallengeLeaderboardPanel();
     if (state.isRecording) {
       stopRecording();
       return;
