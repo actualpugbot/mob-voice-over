@@ -297,13 +297,17 @@ const ORIGINAL_WAVEFORM_BAR_COUNT = 96;
 let queuedClosenessSignature = "";
 const MIN_ANALYSIS_RMS = 1e-5;
 const ENVELOPE_BINS = 72;
-const CLOSENESS_ROW_STAGGER_MS = 50;
-const CLOSENESS_BAR_START_OFFSET_MS = 120;
-const CLOSENESS_BAR_ANIMATION_MS = 700;
-const CLOSENESS_BAR_STAGGER_MAX_MS = 850;
-const CLOSENESS_RING_REVEAL_BUFFER_MS = 120;
+const CLOSENESS_PROGRESS_FLOOR_PCT = 8;
+const CLOSENESS_PROGRESS_LOADING_CAP_PCT = 96;
+const CLOSENESS_PROGRESS_TICK_MS = 90;
+const CLOSENESS_PROGRESS_RAMP_MS = 2600;
+const CLOSENESS_PROGRESS_READY_HOLD_MS = 320;
+const CLOSENESS_ROW_REVEAL_STEP_MS = 170;
+const CLOSENESS_BAR_START_OFFSET_MS = 90;
+const CLOSENESS_TOTAL_REVEAL_DELAY_MS = 220;
+const CLOSENESS_POINTS_REVEAL_DELAY_MS = 320;
 const CLOSENESS_RING_ANIMATION_MS = 760;
-const GIFT_PACK_REVEAL_BUFFER_MS = 140;
+const GIFT_PACK_REVEAL_BUFFER_MS = 260;
 
 const state = {
   theme: DEFAULT_THEME,
@@ -366,6 +370,8 @@ const state = {
   closenessAnalysis: {
     status: "idle",
     lastSignature: "",
+    startedAt: 0,
+    completedAt: 0,
     overallPct: null,
     comparedCount: 0,
     processedCount: 0,
@@ -373,11 +379,19 @@ const state = {
     results: [],
     error: ""
   },
-  closenessAnimatedSignature: "",
-  giftPackRevealDone: false,
-  giftPackRevealAt: 0,
-  giftPackRevealForSignature: "",
-  giftPackRevealTimer: null,
+  closenessProgressPct: CLOSENESS_PROGRESS_FLOOR_PCT,
+  closenessProgressSignature: "",
+  closenessProgressTimer: null,
+  closenessReveal: {
+    signature: "",
+    started: false,
+    rowsShown: 0,
+    summaryVisible: false,
+    pointsVisible: false,
+    giftVisible: false,
+    giftAnimate: false
+  },
+  closenessRevealTimers: [],
   showHowToOverlay: false,
   howToDismissAnimating: false,
   mobImageLoopTimer: null,
@@ -483,6 +497,49 @@ function idleRecordButtonLabel(clip) {
   return clip?.recording?.blob ? `Retry (-${RETRY_PENALTY})` : "Record Your Voice!";
 }
 
+function floatingScoreFxMarkup() {
+  return state.scoreFxItems
+    .map(
+      (item) => `<span class="score-fx score-fx-${item.type}" data-fx-id="${escapeHtml(item.id)}">${escapeHtml(item.text)}</span>`
+    )
+    .concat(
+      state.bonusFxItems.map(
+        (item) => `<span class="score-fx score-fx-${item.type}" data-fx-id="${escapeHtml(item.id)}">${escapeHtml(item.text)}</span>`
+      )
+    )
+    .join("");
+}
+
+function refreshScoreboardStripUi() {
+  const scoreLayer = document.getElementById("score-fx-layer");
+  const scoreWrap = document.getElementById("score-value");
+  const scoreNumber = document.getElementById("score-number");
+  const progressValue = document.getElementById("progress-value");
+  const advancedRecordedCount = document.getElementById("advanced-recorded-count-value");
+  if (!scoreLayer && !scoreWrap && !scoreNumber && !progressValue && !advancedRecordedCount) return false;
+
+  if (progressValue && !IS_ADVANCED_PAGE) {
+    const progressTarget = progressTargetCount();
+    const progressNow = Math.min(state.completedCount, progressTarget);
+    progressValue.textContent = `${progressNow} / ${progressTarget}`;
+  }
+
+  if (scoreWrap) {
+    const pulseClass = state.scorePulseType ? `score-value-${state.scorePulseType}` : "";
+    scoreWrap.className = `score-value${pulseClass ? ` ${pulseClass}` : ""}`;
+  }
+  if (scoreNumber && !IS_ADVANCED_PAGE) {
+    scoreNumber.textContent = String(Math.round(state.displayedScore));
+  }
+  if (scoreLayer) {
+    scoreLayer.innerHTML = floatingScoreFxMarkup();
+  }
+  if (advancedRecordedCount && IS_ADVANCED_PAGE) {
+    advancedRecordedCount.textContent = String(readyRecordingCount());
+  }
+  return true;
+}
+
 function cancelScoreAnimation() {
   if (!state.scoreAnimationFrame) return;
   cancelAnimationFrame(state.scoreAnimationFrame);
@@ -495,7 +552,7 @@ function animateScoreTo(targetScore) {
   const endScore = Number(targetScore || 0);
   if (Math.round(startScore) === Math.round(endScore)) {
     state.displayedScore = endScore;
-    render();
+    if (!refreshScoreboardStripUi()) render();
     return;
   }
 
@@ -507,14 +564,14 @@ function animateScoreTo(targetScore) {
     const t = Math.min(1, (now - startedAt) / durationMs);
     const eased = 1 - (1 - t) ** 3;
     state.displayedScore = startScore + (endScore - startScore) * eased;
-    render();
+    if (!refreshScoreboardStripUi()) render();
     if (t < 1) {
       state.scoreAnimationFrame = requestAnimationFrame(tick);
       return;
     }
     state.displayedScore = endScore;
     state.scoreAnimationFrame = null;
-    render();
+    if (!refreshScoreboardStripUi()) render();
   };
 
   state.scoreAnimationFrame = requestAnimationFrame(tick);
@@ -535,30 +592,33 @@ function applyScoreDelta(delta) {
 function triggerScoreFeedback(delta) {
   const type = delta > 0 ? "positive" : "negative";
   state.scorePulseType = type;
+  if (!refreshScoreboardStripUi()) render();
   if (state.scorePulseTimer) {
     clearTimeout(state.scorePulseTimer);
   }
   state.scorePulseTimer = window.setTimeout(() => {
     state.scorePulseType = "";
     state.scorePulseTimer = null;
-    render();
+    if (!refreshScoreboardStripUi()) render();
   }, 450);
 
   const id = `${Date.now()}-${state.scoreFxCounter++}`;
   const text = `${delta > 0 ? "+" : "-"}${Math.abs(Math.round(delta))}`;
   state.scoreFxItems = [...state.scoreFxItems, { id, text, type }];
+  if (!refreshScoreboardStripUi()) render();
   window.setTimeout(() => {
     state.scoreFxItems = state.scoreFxItems.filter((item) => item.id !== id);
-    render();
+    if (!refreshScoreboardStripUi()) render();
   }, 950);
 }
 
 function triggerBlindBonusToast() {
   const id = `${Date.now()}-blind-${state.scoreFxCounter++}`;
   state.bonusFxItems = [...state.bonusFxItems, { id, text: `+${BLIND_BONUS_POINTS} Blind Bonus!`, type: "bonus" }];
+  if (!refreshScoreboardStripUi()) render();
   window.setTimeout(() => {
     state.bonusFxItems = state.bonusFxItems.filter((item) => item.id !== id);
-    render();
+    if (!refreshScoreboardStripUi()) render();
   }, 1200);
 }
 
@@ -1032,12 +1092,23 @@ function scoreCloseness(recorded, original) {
 async function runClosenessAnalysis(signature) {
   const runId = state.closenessRunId + 1;
   state.closenessRunId = runId;
+  clearClosenessProgressTimer();
+  clearClosenessRevealTimers();
+  state.closenessProgressSignature = signature;
+  state.closenessProgressPct = CLOSENESS_PROGRESS_FLOOR_PCT;
+  resetClosenessRevealState(signature);
+  const startedAt = Date.now();
   state.closenessAnalysis = {
     ...state.closenessAnalysis,
     status: "loading",
     lastSignature: signature,
+    startedAt,
+    completedAt: 0,
+    overallPct: null,
+    comparedCount: 0,
     processedCount: 0,
     totalCount: recordItems().length,
+    results: [],
     error: ""
   };
   render();
@@ -1098,6 +1169,8 @@ async function runClosenessAnalysis(signature) {
     state.closenessAnalysis = {
       status: "ready",
       lastSignature: signature,
+      startedAt,
+      completedAt: Date.now(),
       overallPct: comparedCount ? Math.round(totalPct / comparedCount) : null,
       comparedCount,
       processedCount: results.length,
@@ -1112,10 +1185,57 @@ async function runClosenessAnalysis(signature) {
       ...state.closenessAnalysis,
       status: "error",
       lastSignature: signature,
+      completedAt: Date.now(),
       error: String(err?.message || err)
     };
     render();
   }
+}
+
+function closenessProgressTargetPct(closeness, totalCount) {
+  if (closeness.status === "ready" || closeness.status === "error") return 100;
+  const safeTotal = Math.max(1, Number(totalCount || closeness.totalCount || 1));
+  const safeProcessed = Math.max(0, Math.min(safeTotal, Number(closeness.processedCount || 0)));
+  const actualPct = (safeProcessed / safeTotal) * 100;
+  const startedAt = Number(closeness.startedAt || 0);
+  const elapsed = startedAt ? Math.max(0, Date.now() - startedAt) : 0;
+  const pacedCeiling = CLOSENESS_PROGRESS_LOADING_CAP_PCT - 2;
+  const pacedPct = Math.min(pacedCeiling, (elapsed / CLOSENESS_PROGRESS_RAMP_MS) * pacedCeiling);
+  const leadCap = Math.min(CLOSENESS_PROGRESS_LOADING_CAP_PCT, actualPct + 14);
+  const blendedPct = Math.min(leadCap, Math.max(actualPct, pacedPct));
+  return Math.max(CLOSENESS_PROGRESS_FLOOR_PCT, Math.min(CLOSENESS_PROGRESS_LOADING_CAP_PCT, blendedPct));
+}
+
+function updateClosenessProgressVisual(signature, closeness, totalCount) {
+  const progressSignature = signature || closeness.lastSignature || "";
+  if (state.closenessProgressSignature !== progressSignature) {
+    state.closenessProgressSignature = progressSignature;
+    state.closenessProgressPct = CLOSENESS_PROGRESS_FLOOR_PCT;
+    clearClosenessProgressTimer();
+  }
+
+  const targetPct = closenessProgressTargetPct(closeness, totalCount);
+  const currentPct = Math.max(0, Math.min(100, Number(state.closenessProgressPct || 0)));
+  if (currentPct < targetPct) {
+    const delta = targetPct - currentPct;
+    const easedStep = Math.max(0.1, delta * 0.07);
+    state.closenessProgressPct = Math.min(targetPct, currentPct + easedStep);
+  } else if (currentPct > targetPct) {
+    state.closenessProgressPct = targetPct;
+  }
+
+  const needsAnotherTick = Math.abs(targetPct - state.closenessProgressPct) > 0.35;
+  if (state.step === 1 && needsAnotherTick && !state.closenessProgressTimer) {
+    state.closenessProgressTimer = window.setTimeout(() => {
+      state.closenessProgressTimer = null;
+      if (state.step !== 1) return;
+      render();
+    }, CLOSENESS_PROGRESS_TICK_MS);
+  } else if (!needsAnotherTick) {
+    clearClosenessProgressTimer();
+  }
+
+  return Math.max(0, Math.min(100, Math.round(state.closenessProgressPct)));
 }
 
 function queueClosenessAnalysis(signature) {
@@ -1289,11 +1409,91 @@ function clearRevealTimers() {
   state.revealTimers = [];
 }
 
-function clearGiftPackRevealTimer() {
-  if (state.giftPackRevealTimer) {
-    clearTimeout(state.giftPackRevealTimer);
-    state.giftPackRevealTimer = null;
+function clearClosenessProgressTimer() {
+  if (state.closenessProgressTimer) {
+    clearTimeout(state.closenessProgressTimer);
+    state.closenessProgressTimer = null;
   }
+}
+
+function clearClosenessRevealTimers() {
+  if (!Array.isArray(state.closenessRevealTimers)) return;
+  state.closenessRevealTimers.forEach((id) => clearTimeout(id));
+  state.closenessRevealTimers = [];
+}
+
+function resetClosenessRevealState(signature = "") {
+  state.closenessReveal = {
+    signature,
+    started: false,
+    rowsShown: 0,
+    summaryVisible: false,
+    pointsVisible: false,
+    giftVisible: false,
+    giftAnimate: false
+  };
+}
+
+function clearClosenessSequenceTimers() {
+  clearClosenessProgressTimer();
+  clearClosenessRevealTimers();
+}
+
+function canContinueClosenessReveal(signature) {
+  return (
+    state.step === 1 &&
+    state.closenessAnalysis.status === "ready" &&
+    state.closenessAnalysis.lastSignature === signature &&
+    state.closenessReveal.signature === signature
+  );
+}
+
+function startClosenessRevealSequence(signature, rowCount) {
+  clearClosenessProgressTimer();
+  clearClosenessRevealTimers();
+  state.closenessReveal = {
+    signature,
+    started: true,
+    rowsShown: 0,
+    summaryVisible: false,
+    pointsVisible: false,
+    giftVisible: false,
+    giftAnimate: false
+  };
+
+  const totalRows = Math.max(0, Number(rowCount || 0));
+  for (let i = 1; i <= totalRows; i += 1) {
+    const timerId = window.setTimeout(() => {
+      if (!canContinueClosenessReveal(signature)) return;
+      state.closenessReveal.rowsShown = i;
+      render();
+    }, i * CLOSENESS_ROW_REVEAL_STEP_MS);
+    state.closenessRevealTimers.push(timerId);
+  }
+
+  const summaryDelay = totalRows * CLOSENESS_ROW_REVEAL_STEP_MS + CLOSENESS_TOTAL_REVEAL_DELAY_MS;
+  const summaryTimer = window.setTimeout(() => {
+    if (!canContinueClosenessReveal(signature)) return;
+    state.closenessReveal.summaryVisible = true;
+    render();
+  }, summaryDelay);
+
+  const pointsDelay = summaryDelay + CLOSENESS_POINTS_REVEAL_DELAY_MS;
+  const pointsTimer = window.setTimeout(() => {
+    if (!canContinueClosenessReveal(signature)) return;
+    state.closenessReveal.pointsVisible = true;
+    render();
+  }, pointsDelay);
+
+  const giftDelay = pointsDelay + CLOSENESS_RING_ANIMATION_MS + GIFT_PACK_REVEAL_BUFFER_MS;
+  const giftTimer = window.setTimeout(() => {
+    if (!canContinueClosenessReveal(signature)) return;
+    state.closenessReveal.giftVisible = true;
+    state.closenessReveal.giftAnimate = true;
+    render();
+  }, giftDelay);
+
+  state.closenessRevealTimers.push(summaryTimer, pointsTimer, giftTimer);
 }
 
 function beginTwistReveal() {
@@ -1326,7 +1526,7 @@ function advanceToNextMob() {
 
 function resetWorkflow() {
   clearRevealTimers();
-  clearGiftPackRevealTimer();
+  clearClosenessSequenceTimers();
   stopPreviewAudio();
   stopHintAudio();
   state.mobs.forEach((mob) => {
@@ -1367,17 +1567,18 @@ function resetWorkflow() {
   state.closenessAnalysis = {
     status: "idle",
     lastSignature: "",
+    startedAt: 0,
+    completedAt: 0,
     overallPct: null,
     comparedCount: 0,
     processedCount: 0,
     totalCount: 0,
-      results: [],
-      error: ""
+    results: [],
+    error: ""
   };
-  state.closenessAnimatedSignature = "";
-  state.giftPackRevealDone = false;
-  state.giftPackRevealAt = 0;
-  state.giftPackRevealForSignature = "";
+  state.closenessProgressPct = CLOSENESS_PROGRESS_FLOOR_PCT;
+  state.closenessProgressSignature = "";
+  resetClosenessRevealState("");
   updateCompletedCount();
 }
 
@@ -1543,26 +1744,17 @@ function render() {
   stopMobImageLoop();
   updateCompletedCount();
   if (state.step !== 1) {
-    clearGiftPackRevealTimer();
-    state.giftPackRevealDone = false;
-    state.giftPackRevealAt = 0;
-    state.giftPackRevealForSignature = "";
+    clearClosenessSequenceTimers();
+    state.closenessProgressSignature = "";
+    state.closenessProgressPct = CLOSENESS_PROGRESS_FLOOR_PCT;
+    resetClosenessRevealState("");
   }
   app.innerHTML = "";
   const page = el(`<section class="sheet"></section>`);
   const progressTarget = progressTargetCount();
   const progressNow = Math.min(state.completedCount, progressTarget);
   const scorePulseClass = state.scorePulseType ? `score-value-${state.scorePulseType}` : "";
-  const floatingFx = state.scoreFxItems
-    .map(
-      (item) => `<span class="score-fx score-fx-${item.type}" data-fx-id="${escapeHtml(item.id)}">${escapeHtml(item.text)}</span>`
-    )
-    .concat(
-      state.bonusFxItems.map(
-        (item) => `<span class="score-fx score-fx-${item.type}" data-fx-id="${escapeHtml(item.id)}">${escapeHtml(item.text)}</span>`
-      )
-    )
-    .join("");
+  const floatingFx = floatingScoreFxMarkup();
 
   page.insertAdjacentHTML(
     "beforeend",
@@ -1575,12 +1767,14 @@ function render() {
         <p>${
           IS_ADVANCED_PAGE
             ? `Recorded: <strong id="advanced-recorded-count-value">${readyRecordingCount()}</strong>`
-            : `Progress: <strong>${progressNow} / ${progressTarget}</strong>`
+            : `Progress: <strong id="progress-value">${progressNow} / ${progressTarget}</strong>`
         }</p>
-        <p class="score-value ${scorePulseClass}">${
-          IS_ADVANCED_PAGE ? "Mode: <strong>Advanced</strong>" : `Score: <strong>${Math.round(state.displayedScore)}</strong>`
+        <p id="score-value" class="score-value ${scorePulseClass}">${
+          IS_ADVANCED_PAGE
+            ? "Mode: <strong>Advanced</strong>"
+            : `Score: <strong id="score-number">${Math.round(state.displayedScore)}</strong>`
         }</p>
-        <div class="score-fx-layer" aria-hidden="true">${floatingFx}</div>
+        <div id="score-fx-layer" class="score-fx-layer" aria-hidden="true">${floatingFx}</div>
       </div>
     </header>
     <div class="top-right-tools">
@@ -1992,11 +2186,38 @@ function renderExport(root) {
     queueClosenessAnalysis(currentAnalysisSignature);
   }
   const closeness = state.closenessAnalysis;
-  const isAnalyzing = closeness.status === "idle" || closeness.status === "loading";
-  const showResults = !isAnalyzing;
   const totalForProgress = Math.max(1, Number(closeness.totalCount || items.length || 1));
   const processedForProgress = Math.max(0, Math.min(totalForProgress, Number(closeness.processedCount || 0)));
-  const loadingPct = Math.max(8, Math.min(96, Math.round((processedForProgress / totalForProgress) * 100)));
+  const loadingPct = updateClosenessProgressVisual(currentAnalysisSignature, closeness, totalForProgress);
+  const readySignature = closeness.status === "ready" ? closeness.lastSignature : "";
+  if (readySignature) {
+    if (state.closenessReveal.signature !== readySignature) {
+      clearClosenessRevealTimers();
+      resetClosenessRevealState(readySignature);
+    }
+    const readyAt = Number(closeness.completedAt || 0);
+    const readyHoldSatisfied = !readyAt || Date.now() - readyAt >= CLOSENESS_PROGRESS_READY_HOLD_MS;
+    if (!state.closenessReveal.started && loadingPct >= 100 && readyHoldSatisfied) {
+      startClosenessRevealSequence(readySignature, closeness.results.length);
+    }
+  } else if (state.closenessReveal.signature) {
+    clearClosenessRevealTimers();
+    resetClosenessRevealState("");
+  }
+
+  const showCalculationLoading =
+    closeness.status === "idle" ||
+    closeness.status === "loading" ||
+    (closeness.status === "ready" && !state.closenessReveal.started);
+  const showResultsPanel = closeness.status === "error" || (closeness.status === "ready" && state.closenessReveal.started);
+  const rowsShownForStatus =
+    closeness.status === "ready"
+      ? Math.max(0, Math.min(closeness.results.length, Number(state.closenessReveal.rowsShown || 0)))
+      : closeness.results.length;
+  const visibleRows = closeness.status === "ready" ? closeness.results.slice(0, rowsShownForStatus) : closeness.results;
+  const summaryVisible = closeness.status === "ready" ? state.closenessReveal.summaryVisible : true;
+  const pointsVisible = closeness.status === "ready" ? state.closenessReveal.pointsVisible : true;
+  const showRing = summaryVisible && closeness.status === "ready";
   const scoredRows = closeness.results.filter((row) => row.status === "scored");
   const clipByMobId = new Map(
     state.mobs.map((mob) => {
@@ -2004,20 +2225,18 @@ function renderExport(root) {
       return [cleanId, { mob, clip: getClipState(mob, BASIC_CLIP_KEY) }];
     })
   );
-  const chartRows = closeness.results.map((row, idx) => {
+  const chartRows = visibleRows.map((row) => {
     const pct = row.pct ?? 0;
     const status = closenessStatusLabel(row.status);
     const rowClass = row.status === "scored" ? "is-scored" : "is-unscored";
     const valueText = row.status === "scored" ? `${pct}%` : status;
-    const animDelay = Math.min(idx * CLOSENESS_ROW_STAGGER_MS, CLOSENESS_BAR_STAGGER_MAX_MS);
-    const barDelay = animDelay + CLOSENESS_BAR_START_OFFSET_MS;
     const cleanMobId = normalizeMobId(row.mobId);
     const clipEntry = clipByMobId.get(cleanMobId) || null;
     const hasRecording = Boolean(clipEntry?.clip?.recording?.url);
     const rowClipId = clipEntry ? clipIdFor(clipEntry.mob, BASIC_CLIP_KEY) : `${cleanMobId}::${BASIC_CLIP_KEY}`;
     const previewing = hasRecording && state.previewClipId === rowClipId && Boolean(state.previewAudio);
     const playAriaLabel = previewing ? "Stop playback" : `Play ${row.mobName} recording`;
-    return `<div class="closeness-row ${rowClass}" style="--row-delay:${animDelay}ms;">
+    return `<div class="closeness-row ${rowClass}">
       <button
         class="indicator-play-btn closeness-row-play-btn ${previewing ? "is-playing" : ""}"
         type="button"
@@ -2034,7 +2253,7 @@ function renderExport(root) {
           <strong>${escapeHtml(valueText)}</strong>
         </div>
         <div class="closeness-bar-track">
-          <span class="closeness-bar-fill" style="--bar-pct:${pct};--bar-delay:${barDelay}ms;"></span>
+          <span class="closeness-bar-fill" style="--bar-pct:${pct};--bar-delay:${CLOSENESS_BAR_START_OFFSET_MS}ms;"></span>
         </div>
       </div>
     </div>`;
@@ -2045,90 +2264,89 @@ function renderExport(root) {
       : closeness.overallPct == null
         ? "No scored comparisons yet"
         : `${closeness.overallPct}% Total Closeness`;
-  const shouldAnimateClosenessBars =
-    showResults &&
-    closeness.status === "ready" &&
-    Boolean(closeness.lastSignature) &&
-    state.closenessAnimatedSignature !== closeness.lastSignature;
-  if (shouldAnimateClosenessBars) {
-    state.closenessAnimatedSignature = closeness.lastSignature;
-  }
   const closenessSubline =
     closeness.status === "error"
       ? closeness.error || "Try going back, re-recording, and finishing again."
-      : `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`;
+      : summaryVisible
+        ? `${scoredRows.length} of ${closeness.totalCount || state.mobs.length} mobs compared against original sounds.`
+        : `Loaded ${rowsShownForStatus}/${Math.max(1, closeness.results.length)} mob comparisons.`;
+  const loadingTitle = closeness.status === "ready" ? "Finalizing Similarity Report..." : "Calculating Recording Similarities...";
+  const loadingNote =
+    closeness.status === "ready"
+      ? "Preparing the step-by-step closeness reveal..."
+      : processedForProgress >= totalForProgress
+        ? "Wrapping up the last comparison pass..."
+        : `Compared ${processedForProgress}/${totalForProgress} recordings so far.`;
+  const calcSeedPct = closeness.status === "ready" ? 100 : loadingPct;
+  const loadingCalculations = [
+    { label: "Duration alignment", pct: Math.min(100, Math.round(calcSeedPct * 0.9 + 8)) },
+    { label: "Loudness profile", pct: Math.min(100, Math.round(calcSeedPct * 0.84 + 12)) },
+    { label: "Envelope similarity", pct: Math.min(100, Math.round(calcSeedPct * 0.93 + 6)) },
+    { label: "Motion matching", pct: Math.min(100, Math.round(calcSeedPct * 0.8 + 16)) }
+  ];
+  const loadingCalculationRows = loadingCalculations
+    .map((item) => `<li><span>${escapeHtml(item.label)}</span><strong>${item.pct}%</strong></li>`)
+    .join("");
   const closenessChartClass = chartRows.length > 10 ? "closeness-chart is-scrollable" : "closeness-chart";
-  const closenessPanelClass = `closeness-panel${shouldAnimateClosenessBars ? " is-entrance" : " is-static"}`;
-  const maxRowDelay = chartRows.length
-    ? Math.min((chartRows.length - 1) * CLOSENESS_ROW_STAGGER_MS, CLOSENESS_BAR_STAGGER_MAX_MS)
-    : 0;
-  const ringDelay = shouldAnimateClosenessBars && chartRows.length > 0
-    ? maxRowDelay + CLOSENESS_BAR_START_OFFSET_MS + CLOSENESS_BAR_ANIMATION_MS + CLOSENESS_RING_REVEAL_BUFFER_MS
-    : 0;
-  const readySignature = showResults && closeness.status === "ready" ? closeness.lastSignature : "";
-  if (!readySignature) {
-    clearGiftPackRevealTimer();
-    state.giftPackRevealDone = false;
-    state.giftPackRevealAt = 0;
-    state.giftPackRevealForSignature = "";
+  const closenessPanelClass = `closeness-panel is-static${summaryVisible ? " is-summary-visible" : ""}${
+    pointsVisible ? " is-points-visible" : ""
+  }`;
+  const chartFallback =
+    closeness.status === "ready" && state.closenessReveal.started
+      ? '<p class="note closeness-stage-note">Loading mob-by-mob scores...</p>'
+      : '<p class="note">No mobs to analyze yet.</p>';
+  let shouldAnimateGiftPack = false;
+  if (state.closenessReveal.giftAnimate) {
+    shouldAnimateGiftPack = true;
+    state.closenessReveal.giftAnimate = false;
   }
-  if (!state.giftPackRevealDone && readySignature && state.giftPackRevealForSignature !== readySignature) {
-    clearGiftPackRevealTimer();
-    const shouldDelayGiftPack = ringDelay > 0;
-    const revealDelay = shouldDelayGiftPack ? ringDelay + CLOSENESS_RING_ANIMATION_MS + GIFT_PACK_REVEAL_BUFFER_MS : 0;
-    state.giftPackRevealForSignature = readySignature;
-    state.giftPackRevealAt = Date.now() + revealDelay;
-    if (revealDelay > 0) {
-      state.giftPackRevealTimer = window.setTimeout(() => {
-        state.giftPackRevealTimer = null;
-        if (state.step !== 1) return;
-        if (state.closenessAnalysis.status !== "ready") return;
-        if (state.closenessAnalysis.lastSignature !== readySignature) return;
-        render();
-      }, revealDelay);
-    }
-  }
-  const shouldAnimateGiftPack =
-    showResults &&
-    !state.giftPackRevealDone &&
-    Boolean(readySignature) &&
-    state.giftPackRevealForSignature === readySignature &&
-    Date.now() >= state.giftPackRevealAt;
-  if (shouldAnimateGiftPack) {
-    state.giftPackRevealDone = true;
-  }
-  const showGiftPack = showResults && Boolean(readySignature) && (state.giftPackRevealDone || shouldAnimateGiftPack);
+  const showGiftPack = closeness.status === "ready" && state.closenessReveal.giftVisible;
 
   root.insertAdjacentHTML(
     "beforeend",
     `<section class="panel panel-export">
       ${
-        isAnalyzing
+        showCalculationLoading
           ? `<div>
         <div class="similarity-loading-card">
-          <p class="similarity-loading-title">Calculating Recording Similarities...</p>
+          <p class="similarity-loading-title">${escapeHtml(loadingTitle)}</p>
           <div class="similarity-loading-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${loadingPct}">
             <span class="similarity-loading-fill" style="--analysis-pct:${loadingPct};"></span>
           </div>
-          <p class="note">Compared ${processedForProgress}/${totalForProgress} recordings so far.</p>
+          <p class="note">${escapeHtml(loadingNote)}</p>
+          <ul class="similarity-calc-list">
+            ${loadingCalculationRows}
+          </ul>
         </div>
       </div>`
           : ""
       }
       ${
-        showResults
+        showResultsPanel
           ? `<section class="${closenessPanelClass}">
         <div class="closeness-total">
           <p class="closeness-kicker">Your Results</p>
-          <h3>${escapeHtml(closenessHeadline)}</h3>
+          ${
+            summaryVisible
+              ? `<h3>${escapeHtml(closenessHeadline)}</h3>
           <p class="note">${escapeHtml(closenessSubline)}</p>
-          <div class="closeness-total-ring" style="--total-pct:${Math.max(0, closeness.overallPct || 0)};--ring-delay:${ringDelay}ms;">
+          ${
+            showRing
+              ? `<div class="closeness-total-ring" style="--total-pct:${Math.max(0, closeness.overallPct || 0)};">
             <span>${closeness.overallPct == null ? "--" : `${closeness.overallPct}%`}</span>
-          </div>
-          <p class="note">Total points: <strong>${Math.round(state.displayedScore)}</strong></p>
+          </div>`
+              : ""
+          }`
+              : `<p class="note closeness-stage-note">Revealing mob closeness scores (${rowsShownForStatus}/${Math.max(1, closeness.results.length)})...</p>`
+          }
+          ${
+            pointsVisible
+              ? `<p class="note closeness-points-row">Total points: <strong>${Math.round(state.displayedScore)}</strong></p>`
+              : '<p class="note closeness-points-row is-pending">Final points tally is loading...</p>'
+          }
         </div>
         <div class="${closenessChartClass}">
-          ${chartRows.length ? chartRows.join("") : '<p class="note">No mobs to analyze yet.</p>'}
+          ${chartRows.length ? chartRows.join("") : chartFallback}
         </div>
       </section>
       ${

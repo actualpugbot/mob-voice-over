@@ -988,7 +988,14 @@ audio {
   height: 20px;
   border-radius: 6px;
   border: 1px solid #c9d0dc;
-  background: #edf0f5;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.36), rgba(255, 255, 255, 0)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(140, 156, 184, 0.16) 0 10px,
+      rgba(140, 156, 184, 0.05) 10px 20px
+    ),
+    #edf0f5;
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
   overflow: hidden;
 }
@@ -1007,6 +1014,31 @@ audio {
     linear-gradient(90deg, #73b857, #9ad279);
   animation: analysis-loading-shift 1.4s linear infinite;
   transition: width 0.28s ease;
+}
+
+.similarity-calc-list {
+  width: min(100%, 500px);
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.similarity-calc-list li {
+  border: 1px solid #d4dbe8;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #f9fbff, #eef3fb);
+  padding: 5px 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.78rem;
+  color: #5c6880;
+}
+
+.similarity-calc-list li strong {
+  color: #3d5781;
 }
 
 .ready-badge {
@@ -1468,6 +1500,16 @@ audio {
 .closeness-panel.is-static .closeness-bar-fill {
   animation: none;
   transform: scaleX(1);
+}
+
+.closeness-stage-note {
+  font-weight: 600;
+  color: #5a6780;
+}
+
+.closeness-points-row.is-pending {
+  color: #6f7d95;
+  font-style: italic;
 }
 
 .install-card {
@@ -2962,6 +3004,16 @@ h1 {
   color: #d1d8e5;
 }
 
+:root[data-theme="dark"] .similarity-calc-list li {
+  border-color: #46515f;
+  background: linear-gradient(180deg, #2a2f3a, #252a34);
+  color: #b8c3d8;
+}
+
+:root[data-theme="dark"] .similarity-calc-list li strong {
+  color: #dce9ff;
+}
+
 :root[data-theme="dark"] .gift-pack-kicker {
   color: #d7f1b8;
   background: rgba(116, 149, 76, 0.32);
@@ -2997,6 +3049,11 @@ h1 {
 :root[data-theme="dark"] .closeness-total-ring span,
 :root[data-theme="dark"] .closeness-row-head strong {
   color: #d8dde8;
+}
+
+:root[data-theme="dark"] .closeness-stage-note,
+:root[data-theme="dark"] .closeness-points-row.is-pending {
+  color: #b8c4d7;
 }
 
 :root[data-theme="dark"] .closeness-total-ring {
