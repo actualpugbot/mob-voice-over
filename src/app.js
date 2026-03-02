@@ -1936,23 +1936,19 @@ function render() {
               <path d="M4 4 L12 12 M12 4 L4 12"></path>
             </svg>
           </button>
-          <p class="how-to-kicker">Quick Briefing</p>
-          <h2 id="how-to-title">How to Win the Mob Voice Challenge</h2>
-          <p class="how-to-intro">Sound as close to the original mob as you can and climb into legendary territory.</p>
+
+          <h2 id="how-to-title">How To Play</h2>
+          <p class="how-to-intro">Imitate 10 mobs. Get scored on accuracy.</p>
+
           <ol class="how-to-list">
-            <li><strong>Listen first.</strong> Play the original sound and lock in its pitch, rhythm, and attitude.</li>
-            <li><strong>Record your best take.</strong> Imitate the mob as closely as possible in your own voice.</li>
-            <li><strong>Chase bonus points.</strong> Skip hints and avoid re-recording to maximize your final score.</li>
-            <li><strong>Aim for 80%+ accuracy.</strong> That is the legendary threshold.</li>
+            <li><strong>Listen</strong>   Hear the original sound</li>
+            <li><strong>Record your take</strong>   Match it as closely as possible</li>
+            <li><strong>Submit</strong>   You’re scored on similarity</li>
           </ol>
-          <div class="how-to-score-band" role="note">Score tiers</div>
-          <ul class="how-to-score-list" aria-label="Score tiers">
-            <li><span>95-100%</span> Mythic</li>
-            <li><span>80-94%</span> Legendary</li>
-            <li><span>60-79%</span> Solid run</li>
-          </ul>
-          <p class="how-to-footer-note">One clean take with no hints is the fastest way to top the board.</p>
-          <button id="start-challenge-cta" class="submit-btn" type="button">Start Challenge</button>
+
+          <button id="start-challenge-cta" class="submit-btn" type="button">
+            Start Challenge
+          </button>
         </div>
       </section>`
     );
