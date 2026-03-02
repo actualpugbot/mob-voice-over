@@ -2105,7 +2105,7 @@ function renderRecord(root) {
               </div>
               ${
                 blindBonusAvailable
-                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}">Blind Bonus: +${BLIND_BONUS_POINTS}</span>`
+                  ? `<span class="risk-chip ${blindChipFading ? "is-fading" : ""}" data-tooltip="Get a 150 point bonus if you record BEFORE listening to the original sound." aria-label="Blind Bonus: Get a 150 point bonus if you record before listening to the original sound." tabindex="0">Blind Bonus: +${BLIND_BONUS_POINTS}</span>`
                   : ""
               }
             </div>
