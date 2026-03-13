@@ -123,10 +123,22 @@ h2 {
 
 .app-footer {
   margin: 16px 16px 4px;
-  text-align: center;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.7rem;
+  text-align: left;
   font-size: 0.78rem;
   letter-spacing: 0.02em;
   color: var(--muted);
+}
+
+.app-footer-project-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
 }
 
 .app-footer-link {
@@ -135,6 +147,10 @@ h2 {
   cursor: pointer;
   color: inherit;
   text-decoration: none;
+}
+
+.app-footer-vibe-link {
+  justify-self: end;
 }
 
 .app-footer-link:hover,
@@ -2110,6 +2126,21 @@ audio {
 
   .pager {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .app-footer {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    gap: 0.35rem;
+    text-align: center;
+  }
+
+  .app-footer-project-links {
+    justify-content: center;
+  }
+
+  .app-footer-vibe-link {
+    justify-self: center;
   }
 }
 

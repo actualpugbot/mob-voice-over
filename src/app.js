@@ -35,6 +35,8 @@ const CHALLENGE_LEADERBOARD_ROWS = Object.freeze([
 ]);
 const DEFAULT_THEME = "light";
 const ACTUALPUG_YOUTUBE_URL = "https://www.youtube.com/@actualpug";
+const ENCHANT_OPTIMIZER_URL = "https://actualpugbot.github.io/enchant-optimizer/";
+const CIRCLE_GENERATOR_URL = "https://actualpugbot.github.io/circle-generator/";
 const EXTRA_MOB_IMAGE_EXTENSIONS = Object.freeze({
   camel_husk: "gif",
   copper_golem: "png",
@@ -1823,12 +1825,19 @@ function progressTargetCount() {
   return Math.max(CHALLENGE_PROGRESS_TARGET, recordItems().length);
 }
 
+function appFooterMarkup() {
+  return `<footer class="app-footer">
+    <nav class="app-footer-project-links" aria-label="Related projects">
+      <a class="app-footer-link" href="${ENCHANT_OPTIMIZER_URL}" target="_blank" rel="noopener noreferrer">Enchant Optimizer</a>
+      <a class="app-footer-link" href="${CIRCLE_GENERATOR_URL}" target="_blank" rel="noopener noreferrer">Circle Generator</a>
+    </nav>
+    <a class="app-footer-link app-footer-vibe-link" href="${ACTUALPUG_YOUTUBE_URL}" target="_blank" rel="noopener noreferrer" aria-label="Open ActualPug YouTube channel">Made with ❤️ by ActualPug</a>
+  </footer>`;
+}
+
 function appendAppFooter(root) {
   if (!root) return;
-  root.insertAdjacentHTML(
-    "beforeend",
-    `<footer class="app-footer"><a class="app-footer-link" href="${ACTUALPUG_YOUTUBE_URL}" target="_blank" rel="noopener noreferrer" aria-label="Open ActualPug YouTube channel">Made with ❤️ by ActualPug</a></footer>`
-  );
+  root.insertAdjacentHTML("beforeend", appFooterMarkup());
 }
 
 function render() {
@@ -3942,5 +3951,5 @@ boot()
   })
   .catch((err) => {
     console.error(err);
-    app.innerHTML = `<section class="sheet"><p>Failed to load app: ${escapeHtml(String(err.message || err))}</p><footer class="app-footer"><a class="app-footer-link" href="${ACTUALPUG_YOUTUBE_URL}" target="_blank" rel="noopener noreferrer" aria-label="Open ActualPug YouTube channel">Made with ❤️ by ActualPug</a></footer></section>`;
+    app.innerHTML = `<section class="sheet"><p>Failed to load app: ${escapeHtml(String(err.message || err))}</p>${appFooterMarkup()}</section>`;
   });
